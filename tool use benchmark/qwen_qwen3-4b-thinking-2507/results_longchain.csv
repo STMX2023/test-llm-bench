@@ -1,0 +1,2 @@
+model,overall_score_100,core_correctness_100,tool_hygiene_100,efficiency_100,robustness_stddev_overall,robustness_stddev_core,robustness_stddev_tool,robustness_stddev_efficiency,trials,seeds,success,steps_taken,chain_length,decoy_count,time_sec,total_tokens,tokens_per_sec,json_valid_rate,tool_valid_rate,args_valid_rate,path_correct_rate,failure_reason,last_tool_output
+qwen/qwen3-4b-thinking-2507,97.14,100.0,100.0,71.43,0.0,0.0,0.0,0.0,1,872531190,True,14,10,6,153.07352590560913,14884,97.23431868406841,1.0,1.0,1.0,1.0,,CORRECT! Task Complete.

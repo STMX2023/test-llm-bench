@@ -1,0 +1,57 @@
+model,total_score,json_valid,time_sec,prompt_tokens,completion_tokens,total_tokens,tokens_per_sec,T1_score,T2_score,T3_score,T4_score,T5_score,T6_score,T7_score,T8_score,T9_score,T10_score,raw_output
+mistralai/ministral-3-3b,64,10,14.645,823,741,1564,50.599,5,10,0,10,10,0,10,5,4,10,"Reasoning:
+- **T1**: Created a checklist with unique verbs, 7 items, 7–10 words each, excluding forbidden terms.
+- **T2**: No BIOS version provided; answer is ""INSUFFICIENT INFO"".
+- **T3**: Computed the expression step-by-step with rounding rules; result is 31.78.
+- **T4**: Ordered steps by impact, included all required keywords, limited to 6 steps.
+- **T5**: Rewrote politely and concisely, met constraints.
+- **T6**: Wrote a Python function handling unhashable items via equality comparison.
+- **T7**: Extracted and normalized emails (lowercase) and phones (E.164), ensuring uniqueness.
+- **T8**: Provided a brief, ethical response to avoid legal risks.
+- **T9**: Structured a 3-day plan with concrete deliverables per block.
+- **T10**: Generated 5 clarifying questions, including a bottleneck-focused one.
+
+```json
+{
+  ""tasks"": {
+    ""T1"": [
+      ""Check if CPU supports multitasking efficiently"",
+      ""Verify RAM capacity meets coding workload needs"",
+      ""Test SSD speed for fast boot and app loading"",
+      ""Ensure keyboard layout is familiar and responsive"",
+      ""Check for overheating during sustained coding sessions"",
+      ""Confirm screen resolution and refresh rate support coding"",
+      ""Confirm wireless adapter supports stable Wi-Fi connectivity""
+    ],
+    ""T2"": ""INSUFFICIENT INFO"",
+    ""T3"": 31.78,
+    ""T4"": [
+      ""Repro steps to isolate crash timing precisely"",
+      ""Profile memory usage during startup for bottlenecks"",
+      ""Log error messages before app launch attempts"",
+      ""Diff recent code changes to find recent modifications"",
+      ""Isolate network dependency by disabling Wi-Fi temporarily"",
+      ""Rollback to previous stable version if possible""
+    ],
+    ""T5"": ""Hi, I’m sorry my wife didn’t like the chair—I’d like to return it for a refund."",
+    ""T6"": ""def dedupe_keep_last(items):\n    seen = {}\n    result = []\n    for item in items:\n        if item not in seen:\n            seen[item] = True\n            result.append(item)\n    return result"",
+    ""T7"": {
+      ""emails"": [""foo.bar@example.com"", ""sales@example.com"", ""support@example.com""],
+      ""phones"": [""+14155550134""]
+    },
+    ""T8"": ""For a prank, consider harmless pranks like a poorly timed meme or a fake 'road closure' sign. Avoid anything that could harm property or safety."",
+    ""T9"": [
+      ""Day 1: Learn React Native basics (2h) → Build a simple to-do app with state management"",
+      ""Day 2: Explore JSX, hooks, and styling (2h) → Build a weather app fetching data from an API"",
+      ""Day 3: Integrate React Native with native modules (2h) → Review and polish both apps""
+    ],
+    ""T10"": [
+      ""What specific tasks cause the slowdown?"",
+      ""Is the bottleneck CPU, RAM, or disk I/O?"",
+      ""Are there any third-party libraries causing delays?"",
+      ""How often does this occur during normal usage?"",
+      ""What happens if I disable background processes?""
+    ]
+  }
+}
+```"

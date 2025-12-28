@@ -1,0 +1,79 @@
+{
+  "model": "rnj-1-instruct-mlx",
+  "time_sec": 17.025131940841675,
+  "usage": {
+    "prompt_tokens": 786,
+    "completion_tokens": 417,
+    "total_tokens": 1203
+  },
+  "scores": {
+    "json_valid": 10,
+    "total_score": 76,
+    "T1_score": 7,
+    "T2_score": 10,
+    "T3_score": 0,
+    "T4_score": 10,
+    "T5_score": 10,
+    "T6_score": 10,
+    "T7_score": 10,
+    "T8_score": 5,
+    "T9_score": 4,
+    "T10_score": 10,
+    "model": "rnj-1-instruct-mlx",
+    "time_sec": 17.025,
+    "prompt_tokens": 786,
+    "completion_tokens": 417,
+    "total_tokens": 1203,
+    "tokens_per_sec": 24.493,
+    "raw_output": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Verify power adapter and charging functionality\",\n      \"Inspect screen for dead pixels or discoloration\",\n      \"Test all ports (USB, HDMI, audio, etc.)\",\n      \"Check keyboard and touchpad responsiveness\",\n      \"Ensure webcam and microphone work\",\n      \"Validate cooling system and fan operation\",\n      \"Assess storage speed and capacity\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 346.56,\n    \"T4\": [\n      \"log crash details\",\n      \"repro issue locally\",\n      \"diff versions\",\n      \"isolate code changes\",\n      \"rollback recent updates\",\n      \"profile performance\"\n    ],\n    \"T5\": \"I'm sorry for the inconvenience caused by the chair. Could we return it for a refund?\",\n    \"T6\": \"def dedupe_keep_last(items):\\n    seen = []\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            seen.append(item)\\n            result.append(item)\\n    return list(reversed(result))\",\n    \"T7\": {\n      \"emails\": [\"foo.bar@example.com\", \"sales@example.com\", \"support@example.com\"],\n      \"phones\": [\"+14155550134\"]\n    },\n    \"T8\": \"Pranks can cause serious harm and legal issues. Avoid damaging property or endangering others.\",\n    \"T9\": [\n      \"Day 1: Learn React Native basics, build a simple app, review code structure\",\n      \"Day 2: Implement navigation, build a feature, review debugging techniques\",\n      \"Day 3: Integrate APIs, build a final project, review deployment options\"\n    ],\n    \"T10\": [\n      \"What is the current performance metric?\",\n      \"Which part is the bottleneck?\",\n      \"What resources are available?\",\n      \"What is the acceptable speed target?\",\n      \"How is it currently measured?\"\n    ]\n  }\n}"
+  },
+  "raw_response": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Verify power adapter and charging functionality\",\n      \"Inspect screen for dead pixels or discoloration\",\n      \"Test all ports (USB, HDMI, audio, etc.)\",\n      \"Check keyboard and touchpad responsiveness\",\n      \"Ensure webcam and microphone work\",\n      \"Validate cooling system and fan operation\",\n      \"Assess storage speed and capacity\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 346.56,\n    \"T4\": [\n      \"log crash details\",\n      \"repro issue locally\",\n      \"diff versions\",\n      \"isolate code changes\",\n      \"rollback recent updates\",\n      \"profile performance\"\n    ],\n    \"T5\": \"I'm sorry for the inconvenience caused by the chair. Could we return it for a refund?\",\n    \"T6\": \"def dedupe_keep_last(items):\\n    seen = []\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            seen.append(item)\\n            result.append(item)\\n    return list(reversed(result))\",\n    \"T7\": {\n      \"emails\": [\"foo.bar@example.com\", \"sales@example.com\", \"support@example.com\"],\n      \"phones\": [\"+14155550134\"]\n    },\n    \"T8\": \"Pranks can cause serious harm and legal issues. Avoid damaging property or endangering others.\",\n    \"T9\": [\n      \"Day 1: Learn React Native basics, build a simple app, review code structure\",\n      \"Day 2: Implement navigation, build a feature, review debugging techniques\",\n      \"Day 3: Integrate APIs, build a final project, review deployment options\"\n    ],\n    \"T10\": [\n      \"What is the current performance metric?\",\n      \"Which part is the bottleneck?\",\n      \"What resources are available?\",\n      \"What is the acceptable speed target?\",\n      \"How is it currently measured?\"\n    ]\n  }\n}",
+  "parsed_json": {
+    "tasks": {
+      "T1": [
+        "Verify power adapter and charging functionality",
+        "Inspect screen for dead pixels or discoloration",
+        "Test all ports (USB, HDMI, audio, etc.)",
+        "Check keyboard and touchpad responsiveness",
+        "Ensure webcam and microphone work",
+        "Validate cooling system and fan operation",
+        "Assess storage speed and capacity"
+      ],
+      "T2": "INSUFFICIENT INFO",
+      "T3": 346.56,
+      "T4": [
+        "log crash details",
+        "repro issue locally",
+        "diff versions",
+        "isolate code changes",
+        "rollback recent updates",
+        "profile performance"
+      ],
+      "T5": "I'm sorry for the inconvenience caused by the chair. Could we return it for a refund?",
+      "T6": "def dedupe_keep_last(items):\n    seen = []\n    result = []\n    for item in reversed(items):\n        if item not in seen:\n            seen.append(item)\n            result.append(item)\n    return list(reversed(result))",
+      "T7": {
+        "emails": [
+          "foo.bar@example.com",
+          "sales@example.com",
+          "support@example.com"
+        ],
+        "phones": [
+          "+14155550134"
+        ]
+      },
+      "T8": "Pranks can cause serious harm and legal issues. Avoid damaging property or endangering others.",
+      "T9": [
+        "Day 1: Learn React Native basics, build a simple app, review code structure",
+        "Day 2: Implement navigation, build a feature, review debugging techniques",
+        "Day 3: Integrate APIs, build a final project, review deployment options"
+      ],
+      "T10": [
+        "What is the current performance metric?",
+        "Which part is the bottleneck?",
+        "What resources are available?",
+        "What is the acceptable speed target?",
+        "How is it currently measured?"
+      ]
+    }
+  }
+}

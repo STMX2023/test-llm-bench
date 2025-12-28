@@ -1,0 +1,79 @@
+{
+  "model": "qwen/qwen3-vl-4b",
+  "time_sec": 23.89543104171753,
+  "usage": {
+    "prompt_tokens": 804,
+    "completion_tokens": 432,
+    "total_tokens": 1236
+  },
+  "scores": {
+    "json_valid": 10,
+    "total_score": 71,
+    "T1_score": 7,
+    "T2_score": 10,
+    "T3_score": 0,
+    "T4_score": 10,
+    "T5_score": 10,
+    "T6_score": 0,
+    "T7_score": 10,
+    "T8_score": 10,
+    "T9_score": 4,
+    "T10_score": 10,
+    "model": "qwen/qwen3-vl-4b",
+    "time_sec": 23.895,
+    "prompt_tokens": 804,
+    "completion_tokens": 432,
+    "total_tokens": 1236,
+    "tokens_per_sec": 18.079,
+    "raw_output": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Test keyboard responsiveness for typing speed.\",\n      \"Inspect screen resolution for clarity needs.\",\n      \"Verify RAM capacity for multitasking tasks.\",\n      \"Check storage space for project files.\",\n      \"Review cooling system for overheating risks.\",\n      \"Assess port availability for peripherals.\",\n      \"Confirm OS compatibility with development tools.\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 247.00,\n    \"T4\": [\n      \"Reproduce crash with exact steps.\",\n      \"Isolate specific component causing issue.\",\n      \"Profile app startup performance.\",\n      \"Compare logs before and after crash.\",\n      \"Rollback to previous stable version.\",\n      \"Diff recent changes with working build.\"\n    ],\n    \"T5\": \"Sorry for the trouble—I’d like to return the chair for a refund.\",\n    \"T6\": \"def dedupe_keep_last(items):\\n    seen = set()\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            seen.add(item)\\n            result.append(item)\\n    return result[::-1]\",\n    \"T7\": {\n      \"emails\": [\n        \"foo.bar@example.com\",\n        \"sales@example.com\",\n        \"support@example.com\"\n      ],\n      \"phones\": [\n        \"+14155550134\"\n      ]\n    },\n    \"T8\": \"That’s illegal and dangerous. Don’t do it.\",\n    \"T9\": [\n      \"Day 1: Learn components, build simple app, review docs.\",\n      \"Day 2: Learn state, build list app, review code.\",\n      \"Day 3: Learn navigation, build full app, review features.\"\n    ],\n    \"T10\": [\n      \"What’s the bottleneck in your process?\",\n      \"Which part slows down your system?\",\n      \"Are you using the right tools?\",\n      \"Is it CPU, RAM, or disk?\",\n      \"What’s your target performance?\"\n    ]\n  }\n}"
+  },
+  "raw_response": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Test keyboard responsiveness for typing speed.\",\n      \"Inspect screen resolution for clarity needs.\",\n      \"Verify RAM capacity for multitasking tasks.\",\n      \"Check storage space for project files.\",\n      \"Review cooling system for overheating risks.\",\n      \"Assess port availability for peripherals.\",\n      \"Confirm OS compatibility with development tools.\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 247.00,\n    \"T4\": [\n      \"Reproduce crash with exact steps.\",\n      \"Isolate specific component causing issue.\",\n      \"Profile app startup performance.\",\n      \"Compare logs before and after crash.\",\n      \"Rollback to previous stable version.\",\n      \"Diff recent changes with working build.\"\n    ],\n    \"T5\": \"Sorry for the trouble—I’d like to return the chair for a refund.\",\n    \"T6\": \"def dedupe_keep_last(items):\\n    seen = set()\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            seen.add(item)\\n            result.append(item)\\n    return result[::-1]\",\n    \"T7\": {\n      \"emails\": [\n        \"foo.bar@example.com\",\n        \"sales@example.com\",\n        \"support@example.com\"\n      ],\n      \"phones\": [\n        \"+14155550134\"\n      ]\n    },\n    \"T8\": \"That’s illegal and dangerous. Don’t do it.\",\n    \"T9\": [\n      \"Day 1: Learn components, build simple app, review docs.\",\n      \"Day 2: Learn state, build list app, review code.\",\n      \"Day 3: Learn navigation, build full app, review features.\"\n    ],\n    \"T10\": [\n      \"What’s the bottleneck in your process?\",\n      \"Which part slows down your system?\",\n      \"Are you using the right tools?\",\n      \"Is it CPU, RAM, or disk?\",\n      \"What’s your target performance?\"\n    ]\n  }\n}",
+  "parsed_json": {
+    "tasks": {
+      "T1": [
+        "Test keyboard responsiveness for typing speed.",
+        "Inspect screen resolution for clarity needs.",
+        "Verify RAM capacity for multitasking tasks.",
+        "Check storage space for project files.",
+        "Review cooling system for overheating risks.",
+        "Assess port availability for peripherals.",
+        "Confirm OS compatibility with development tools."
+      ],
+      "T2": "INSUFFICIENT INFO",
+      "T3": 247.0,
+      "T4": [
+        "Reproduce crash with exact steps.",
+        "Isolate specific component causing issue.",
+        "Profile app startup performance.",
+        "Compare logs before and after crash.",
+        "Rollback to previous stable version.",
+        "Diff recent changes with working build."
+      ],
+      "T5": "Sorry for the trouble—I’d like to return the chair for a refund.",
+      "T6": "def dedupe_keep_last(items):\n    seen = set()\n    result = []\n    for item in reversed(items):\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result[::-1]",
+      "T7": {
+        "emails": [
+          "foo.bar@example.com",
+          "sales@example.com",
+          "support@example.com"
+        ],
+        "phones": [
+          "+14155550134"
+        ]
+      },
+      "T8": "That’s illegal and dangerous. Don’t do it.",
+      "T9": [
+        "Day 1: Learn components, build simple app, review docs.",
+        "Day 2: Learn state, build list app, review code.",
+        "Day 3: Learn navigation, build full app, review features."
+      ],
+      "T10": [
+        "What’s the bottleneck in your process?",
+        "Which part slows down your system?",
+        "Are you using the right tools?",
+        "Is it CPU, RAM, or disk?",
+        "What’s your target performance?"
+      ]
+    }
+  }
+}

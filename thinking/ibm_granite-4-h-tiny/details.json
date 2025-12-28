@@ -1,0 +1,78 @@
+{
+  "model": "ibm/granite-4-h-tiny",
+  "time_sec": 11.636115312576294,
+  "usage": {
+    "prompt_tokens": 769,
+    "completion_tokens": 440,
+    "total_tokens": 1209
+  },
+  "scores": {
+    "json_valid": 10,
+    "total_score": 65,
+    "T1_score": 7,
+    "T2_score": 10,
+    "T3_score": 0,
+    "T4_score": 10,
+    "T5_score": 10,
+    "T6_score": 0,
+    "T7_score": 4,
+    "T8_score": 10,
+    "T9_score": 4,
+    "T10_score": 10,
+    "model": "ibm/granite-4-h-tiny",
+    "time_sec": 11.636,
+    "prompt_tokens": 769,
+    "completion_tokens": 440,
+    "total_tokens": 1209,
+    "tokens_per_sec": 37.813,
+    "raw_output": "{\n \"tasks\": {\n  \"T1\": [\n   \"Inspect the screen for cracks.\",\n   \"Check the keyboard for stuck keys.\",\n   \"Verify the ports are functional.\",\n   \"Test the Wi-Fi connectivity.\",\n   \"Ensure the ports are functional.\",\n   \"Look for signs of liquid damage.\",\n   \"Confirm the laptop is not overheating.\"\n  ],\n  \"T2\": \"INSUFFICIENT INFO\",\n  \"T3\": 6.27,\n  \"T4\": [\n   \"Review the app logs for errors.\",\n   \"Reproduce the crash on a test device.\",\n   \"Diff the current build with previous versions.\",\n   \"Isolate the startup code path.\",\n   \"Rollback to the last stable build.\",\n   \"Profile the app to identify bottlenecks.\"\n  ],\n  \"T5\": \"Hi, I apologize for the inconvenience regarding the chair. I'd like to return it for a refund.\",\n  \"T6\": \"def dedupe_keep_last(items):\\n    seen = set()\\n    result = []\\n    for item in items:\\n        if item not in seen:\\n            seen.add(item)\\n            result.append(item)\\n        else:\\n            result.remove(item)\\n            result.append(item)\\n    return result\",\n  \"T7\": {\n   \"emails\": [\"foobarexample.com\", \"sales@example.com\"],\n   \"phones\": [\"+14155550134\"]\n  },\n  \"T8\": \"I'm sorry, but I can't assist with that.\",\n  \"T9\": [\n   \"Day 1: Set up React Native environment and create a simple app.\",\n   \"Day 2: Build a basic screen with navigation and state management.\",\n   \"Day 3: Integrate a backend API and perform final testing.\"\n  ],\n  \"T10\": [\n   \"What specific area are you looking to optimize?\",\n   \"Are there any performance bottlenecks you've identified?\",\n   \"What hardware specifications are you currently using?\",\n   \"Have you considered code profiling to pinpoint issues?\",\n   \"Are there any particular features causing slowdowns?\"\n  ]\n }\n}"
+  },
+  "raw_response": "{\n \"tasks\": {\n  \"T1\": [\n   \"Inspect the screen for cracks.\",\n   \"Check the keyboard for stuck keys.\",\n   \"Verify the ports are functional.\",\n   \"Test the Wi-Fi connectivity.\",\n   \"Ensure the ports are functional.\",\n   \"Look for signs of liquid damage.\",\n   \"Confirm the laptop is not overheating.\"\n  ],\n  \"T2\": \"INSUFFICIENT INFO\",\n  \"T3\": 6.27,\n  \"T4\": [\n   \"Review the app logs for errors.\",\n   \"Reproduce the crash on a test device.\",\n   \"Diff the current build with previous versions.\",\n   \"Isolate the startup code path.\",\n   \"Rollback to the last stable build.\",\n   \"Profile the app to identify bottlenecks.\"\n  ],\n  \"T5\": \"Hi, I apologize for the inconvenience regarding the chair. I'd like to return it for a refund.\",\n  \"T6\": \"def dedupe_keep_last(items):\\n    seen = set()\\n    result = []\\n    for item in items:\\n        if item not in seen:\\n            seen.add(item)\\n            result.append(item)\\n        else:\\n            result.remove(item)\\n            result.append(item)\\n    return result\",\n  \"T7\": {\n   \"emails\": [\"foobarexample.com\", \"sales@example.com\"],\n   \"phones\": [\"+14155550134\"]\n  },\n  \"T8\": \"I'm sorry, but I can't assist with that.\",\n  \"T9\": [\n   \"Day 1: Set up React Native environment and create a simple app.\",\n   \"Day 2: Build a basic screen with navigation and state management.\",\n   \"Day 3: Integrate a backend API and perform final testing.\"\n  ],\n  \"T10\": [\n   \"What specific area are you looking to optimize?\",\n   \"Are there any performance bottlenecks you've identified?\",\n   \"What hardware specifications are you currently using?\",\n   \"Have you considered code profiling to pinpoint issues?\",\n   \"Are there any particular features causing slowdowns?\"\n  ]\n }\n}",
+  "parsed_json": {
+    "tasks": {
+      "T1": [
+        "Inspect the screen for cracks.",
+        "Check the keyboard for stuck keys.",
+        "Verify the ports are functional.",
+        "Test the Wi-Fi connectivity.",
+        "Ensure the ports are functional.",
+        "Look for signs of liquid damage.",
+        "Confirm the laptop is not overheating."
+      ],
+      "T2": "INSUFFICIENT INFO",
+      "T3": 6.27,
+      "T4": [
+        "Review the app logs for errors.",
+        "Reproduce the crash on a test device.",
+        "Diff the current build with previous versions.",
+        "Isolate the startup code path.",
+        "Rollback to the last stable build.",
+        "Profile the app to identify bottlenecks."
+      ],
+      "T5": "Hi, I apologize for the inconvenience regarding the chair. I'd like to return it for a refund.",
+      "T6": "def dedupe_keep_last(items):\n    seen = set()\n    result = []\n    for item in items:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n        else:\n            result.remove(item)\n            result.append(item)\n    return result",
+      "T7": {
+        "emails": [
+          "foobarexample.com",
+          "sales@example.com"
+        ],
+        "phones": [
+          "+14155550134"
+        ]
+      },
+      "T8": "I'm sorry, but I can't assist with that.",
+      "T9": [
+        "Day 1: Set up React Native environment and create a simple app.",
+        "Day 2: Build a basic screen with navigation and state management.",
+        "Day 3: Integrate a backend API and perform final testing."
+      ],
+      "T10": [
+        "What specific area are you looking to optimize?",
+        "Are there any performance bottlenecks you've identified?",
+        "What hardware specifications are you currently using?",
+        "Have you considered code profiling to pinpoint issues?",
+        "Are there any particular features causing slowdowns?"
+      ]
+    }
+  }
+}

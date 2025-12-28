@@ -1,0 +1,79 @@
+{
+  "model": "qwen/qwen3-vl-4b",
+  "time_sec": 17.352038860321045,
+  "usage": {
+    "prompt_tokens": 804,
+    "completion_tokens": 424,
+    "total_tokens": 1228
+  },
+  "scores": {
+    "json_valid": 10,
+    "total_score": 71,
+    "T1_score": 7,
+    "T2_score": 10,
+    "T3_score": 0,
+    "T4_score": 10,
+    "T5_score": 10,
+    "T6_score": 0,
+    "T7_score": 10,
+    "T8_score": 10,
+    "T9_score": 4,
+    "T10_score": 10,
+    "model": "qwen/qwen3-vl-4b",
+    "time_sec": 17.352,
+    "prompt_tokens": 804,
+    "completion_tokens": 424,
+    "total_tokens": 1228,
+    "tokens_per_sec": 24.435,
+    "raw_output": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Check keyboard responsiveness for typing tasks.\",\n      \"Verify screen resolution for coding clarity.\",\n      \"Test cooling system to prevent overheating.\",\n      \"Inspect ports for connectivity reliability.\",\n      \"Review storage space for project files.\",\n      \"Confirm RAM capacity for multitasking.\",\n      \"Evaluate input device compatibility with IDE.\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 234.00,\n    \"T4\": [\n      \"Check logs for crash timestamps.\",\n      \"Reproduce crash with minimal setup.\",\n      \"Isolate affected code section.\",\n      \"Profile app startup performance.\",\n      \"Rollback to last stable version.\",\n      \"Diff recent changes with stable build.\"\n    ],\n    \"T5\": \"Sorry for the trouble—can I get a refund?\",\n    \"T6\": \"def dedupe_keep_last(items):\\n    seen = set()\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            seen.add(item)\\n            result.append(item)\\n    return result[::-1]\",\n    \"T7\": {\n      \"emails\": [\n        \"foo.bar@example.com\",\n        \"sales@example.com\",\n        \"support@example.com\"\n      ],\n      \"phones\": [\n        \"+14155550134\"\n      ]\n    },\n    \"T8\": \"That’s illegal. Don’t do it. Stay safe.\",\n    \"T9\": [\n      \"Day 1: Learn components, build simple app, review docs.\",\n      \"Day 2: Learn navigation, build login screen, review code.\",\n      \"Day 3: Learn state, build full app, review features.\"\n    ],\n    \"T10\": [\n      \"Which part is slow? Bottleneck?\",\n      \"What system are you using?\",\n      \"Is it CPU, RAM, or disk?\",\n      \"What’s the target performance?\",\n      \"Are you measuring real-world use?\"\n    ]\n  }\n}"
+  },
+  "raw_response": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Check keyboard responsiveness for typing tasks.\",\n      \"Verify screen resolution for coding clarity.\",\n      \"Test cooling system to prevent overheating.\",\n      \"Inspect ports for connectivity reliability.\",\n      \"Review storage space for project files.\",\n      \"Confirm RAM capacity for multitasking.\",\n      \"Evaluate input device compatibility with IDE.\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 234.00,\n    \"T4\": [\n      \"Check logs for crash timestamps.\",\n      \"Reproduce crash with minimal setup.\",\n      \"Isolate affected code section.\",\n      \"Profile app startup performance.\",\n      \"Rollback to last stable version.\",\n      \"Diff recent changes with stable build.\"\n    ],\n    \"T5\": \"Sorry for the trouble—can I get a refund?\",\n    \"T6\": \"def dedupe_keep_last(items):\\n    seen = set()\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            seen.add(item)\\n            result.append(item)\\n    return result[::-1]\",\n    \"T7\": {\n      \"emails\": [\n        \"foo.bar@example.com\",\n        \"sales@example.com\",\n        \"support@example.com\"\n      ],\n      \"phones\": [\n        \"+14155550134\"\n      ]\n    },\n    \"T8\": \"That’s illegal. Don’t do it. Stay safe.\",\n    \"T9\": [\n      \"Day 1: Learn components, build simple app, review docs.\",\n      \"Day 2: Learn navigation, build login screen, review code.\",\n      \"Day 3: Learn state, build full app, review features.\"\n    ],\n    \"T10\": [\n      \"Which part is slow? Bottleneck?\",\n      \"What system are you using?\",\n      \"Is it CPU, RAM, or disk?\",\n      \"What’s the target performance?\",\n      \"Are you measuring real-world use?\"\n    ]\n  }\n}",
+  "parsed_json": {
+    "tasks": {
+      "T1": [
+        "Check keyboard responsiveness for typing tasks.",
+        "Verify screen resolution for coding clarity.",
+        "Test cooling system to prevent overheating.",
+        "Inspect ports for connectivity reliability.",
+        "Review storage space for project files.",
+        "Confirm RAM capacity for multitasking.",
+        "Evaluate input device compatibility with IDE."
+      ],
+      "T2": "INSUFFICIENT INFO",
+      "T3": 234.0,
+      "T4": [
+        "Check logs for crash timestamps.",
+        "Reproduce crash with minimal setup.",
+        "Isolate affected code section.",
+        "Profile app startup performance.",
+        "Rollback to last stable version.",
+        "Diff recent changes with stable build."
+      ],
+      "T5": "Sorry for the trouble—can I get a refund?",
+      "T6": "def dedupe_keep_last(items):\n    seen = set()\n    result = []\n    for item in reversed(items):\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result[::-1]",
+      "T7": {
+        "emails": [
+          "foo.bar@example.com",
+          "sales@example.com",
+          "support@example.com"
+        ],
+        "phones": [
+          "+14155550134"
+        ]
+      },
+      "T8": "That’s illegal. Don’t do it. Stay safe.",
+      "T9": [
+        "Day 1: Learn components, build simple app, review docs.",
+        "Day 2: Learn navigation, build login screen, review code.",
+        "Day 3: Learn state, build full app, review features."
+      ],
+      "T10": [
+        "Which part is slow? Bottleneck?",
+        "What system are you using?",
+        "Is it CPU, RAM, or disk?",
+        "What’s the target performance?",
+        "Are you measuring real-world use?"
+      ]
+    }
+  }
+}

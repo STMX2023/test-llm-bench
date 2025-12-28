@@ -1,0 +1,276 @@
+{
+  "model": "qwen/qwen3-vl-4b",
+  "time_sec": 114.04541301727295,
+  "usage": {
+    "total_tokens": 16582
+  },
+  "result": {
+    "success": true,
+    "steps_taken": 20,
+    "time_sec": 114.04541301727295,
+    "total_tokens": 16582,
+    "failure_reason": null,
+    "chain_length": 10,
+    "decoy_count": 6,
+    "seed": 620662833,
+    "json_valid_rate": 1.0,
+    "tool_valid_rate": 1.0,
+    "args_valid_rate": 1.0,
+    "path_correct_rate": 1.0,
+    "last_tool_output": "CORRECT! Task Complete.",
+    "transcript": [
+      {
+        "step": 1,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \".\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "."
+          }
+        },
+        "tool_result": "Files in '.': ['start_instructions.txt', 'readme.md']",
+        "expected_next": "delta/trace_789.log"
+      },
+      {
+        "step": 2,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"start_instructions.txt\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "start_instructions.txt"
+          }
+        },
+        "tool_result": "Mission: Find the secret code. The first trace is located at: 'delta/trace_789.log'",
+        "expected_next": "delta/trace_789.log"
+      },
+      {
+        "step": 3,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \"delta\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "delta"
+          }
+        },
+        "tool_result": "Files in 'delta': ['trace_789.log']",
+        "expected_next": "delta/trace_789.log"
+      },
+      {
+        "step": 4,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"delta/trace_789.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "delta/trace_789.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'beta/trace_517.log'",
+        "expected_next": "delta/trace_789.log"
+      },
+      {
+        "step": 5,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \"beta\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "beta"
+          }
+        },
+        "tool_result": "Files in 'beta': ['decoy_977.txt', 'trace_517.log']",
+        "expected_next": "beta/trace_517.log"
+      },
+      {
+        "step": 6,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"beta/trace_517.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "beta/trace_517.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'alpha/trace_559.log'",
+        "expected_next": "beta/trace_517.log"
+      },
+      {
+        "step": 7,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \"alpha\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "alpha"
+          }
+        },
+        "tool_result": "Files in 'alpha': ['trace_388.log', 'trace_559.log']",
+        "expected_next": "alpha/trace_559.log"
+      },
+      {
+        "step": 8,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"alpha/trace_559.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "alpha/trace_559.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'eta/trace_697.log'",
+        "expected_next": "alpha/trace_559.log"
+      },
+      {
+        "step": 9,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \"eta\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "eta"
+          }
+        },
+        "tool_result": "Files in 'eta': ['trace_335.log', 'trace_697.log']",
+        "expected_next": "eta/trace_697.log"
+      },
+      {
+        "step": 10,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"eta/trace_697.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "eta/trace_697.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'epsilon/trace_728.log'",
+        "expected_next": "eta/trace_697.log"
+      },
+      {
+        "step": 11,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \"epsilon\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "epsilon"
+          }
+        },
+        "tool_result": "Files in 'epsilon': ['decoy_612.txt', 'trace_728.log']",
+        "expected_next": "epsilon/trace_728.log"
+      },
+      {
+        "step": 12,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"epsilon/trace_728.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "epsilon/trace_728.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'zeta/trace_579.log'",
+        "expected_next": "epsilon/trace_728.log"
+      },
+      {
+        "step": 13,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \"zeta\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "zeta"
+          }
+        },
+        "tool_result": "Files in 'zeta': ['trace_390.log', 'trace_579.log']",
+        "expected_next": "zeta/trace_579.log"
+      },
+      {
+        "step": 14,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"zeta/trace_579.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "zeta/trace_579.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'alpha/trace_388.log'",
+        "expected_next": "zeta/trace_579.log"
+      },
+      {
+        "step": 15,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"alpha/trace_388.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "alpha/trace_388.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'eta/trace_335.log'",
+        "expected_next": "alpha/trace_388.log"
+      },
+      {
+        "step": 16,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"eta/trace_335.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "eta/trace_335.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'zeta/trace_390.log'",
+        "expected_next": "eta/trace_335.log"
+      },
+      {
+        "step": 17,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"zeta/trace_390.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "zeta/trace_390.log"
+          }
+        },
+        "tool_result": "Trace confirmed. Proceed to next location: 'theta/trace_491.log'",
+        "expected_next": "zeta/trace_390.log"
+      },
+      {
+        "step": 18,
+        "model_output": "```json\n{\n    \"tool\": \"list_files\",\n    \"args\": {\n        \"directory\": \"theta\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "list_files",
+          "args": {
+            "directory": "theta"
+          }
+        },
+        "tool_result": "Files in 'theta': ['decoy_674.txt', 'trace_491.log']",
+        "expected_next": "theta/trace_491.log"
+      },
+      {
+        "step": 19,
+        "model_output": "```json\n{\n    \"tool\": \"read_file\",\n    \"args\": {\n        \"path\": \"theta/trace_491.log\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "read_file",
+          "args": {
+            "path": "theta/trace_491.log"
+          }
+        },
+        "tool_result": "SUCCESS. The secret code is: OMEGA_XYZ_99",
+        "expected_next": "theta/trace_491.log"
+      },
+      {
+        "step": 20,
+        "model_output": "```json\n{\n    \"tool\": \"submit_answer\",\n    \"args\": {\n        \"answer\": \"OMEGA_XYZ_99\"\n    }\n}\n```",
+        "tool_call": {
+          "tool": "submit_answer",
+          "args": {
+            "answer": "OMEGA_XYZ_99"
+          }
+        },
+        "tool_result": "CORRECT! Task Complete.",
+        "expected_next": null
+      }
+    ],
+    "model": "qwen/qwen3-vl-4b",
+    "tokens_per_sec": 145.3982195451258,
+    "core_correctness_100": 100.0,
+    "tool_hygiene_100": 100.0,
+    "efficiency_100": 50.0,
+    "overall_score_100": 95.0,
+    "robustness_stddev_overall": 0.0,
+    "robustness_stddev_core": 0.0,
+    "robustness_stddev_tool": 0.0,
+    "robustness_stddev_efficiency": 0.0,
+    "trials": 1,
+    "seeds": "620662833"
+  }
+}

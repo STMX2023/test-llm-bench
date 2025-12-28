@@ -1,0 +1,78 @@
+{
+  "model": "granite-4.0-h-tiny",
+  "time_sec": 8.91789174079895,
+  "usage": {
+    "prompt_tokens": 859,
+    "completion_tokens": 478,
+    "total_tokens": 1337
+  },
+  "scores": {
+    "json_valid": 10,
+    "total_score": 60,
+    "T1_score": 7,
+    "T2_score": 10,
+    "T3_score": 0,
+    "T4_score": 10,
+    "T5_score": 10,
+    "T6_score": 0,
+    "T7_score": 4,
+    "T8_score": 10,
+    "T9_score": 4,
+    "T10_score": 5,
+    "model": "granite-4.0-h-tiny",
+    "time_sec": 8.918,
+    "prompt_tokens": 859,
+    "completion_tokens": 478,
+    "total_tokens": 1337,
+    "tokens_per_sec": 53.6,
+    "raw_output": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Inspect exterior condition.\",\n      \"Check tire tread and pressure.\",\n      \"Test all lights and signals.\",\n      \"Verify engine performance.\",\n      \"Assess interior comfort and features.\",\n      \"Evaluate maintenance history.\",\n      \"Negotiate price based on findings.\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 1.68,\n    \"T4\": [\n      \"Check console logs for errors.\",\n      \"Reproduce the crash on a test device.\",\n      \"Diff current code with previous version.\",\n      \"Isolate the app's startup process.\",\n      \"Rollback to a known stable build.\",\n      \"Profile memory and CPU usage during startup.\"\n    ],\n    \"T5\": \"Hi, I'm sorry about the chair. Could you please return it for a refund?\",\n    \"T6\": \"def dedupe_keeping_last(items):\\n    seen = set()\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            result.append(item)\\n            seen.add(item)\\n    return list(reversed(result))\",\n    \"T7\": {\"emails\": [\"foobar@example.com\", \"sales@example.com\"], \"phones\": [\"+14155550134\"]},\n    \"T8\": \"I'm sorry, but I can't assist with that. It's important to prioritize safety and legality.\",\n    \"T9\": [\n      \"Day 1: Learn React Native fundamentals (components, state, props). Build a simple counter app.\",\n      \"Day 2: Dive into navigation with React Navigation. Build a tab-based app with two screens.\",\n      \"Day 3: Integrate state management (Redux or Context API). Build a weather app fetching data from an API.\"\n    ],\n    \"T10\": [\n      \"What specific part of the system is slow? Can you identify any bottlenecks?\",\n      \"Are there any known performance issues with the current version of React Native?\",\n      \"Have you tried optimizing assets or lazy loading components to improve speed?\",\n      \"What hardware are you using for development? Does the performance issue persist on different devices?\",\n      \"Are there any specific operations that are taking a long time? Could you provide more details?\"\n    ]\n  }\n}"
+  },
+  "raw_response": "{\n  \"tasks\": {\n    \"T1\": [\n      \"Inspect exterior condition.\",\n      \"Check tire tread and pressure.\",\n      \"Test all lights and signals.\",\n      \"Verify engine performance.\",\n      \"Assess interior comfort and features.\",\n      \"Evaluate maintenance history.\",\n      \"Negotiate price based on findings.\"\n    ],\n    \"T2\": \"INSUFFICIENT INFO\",\n    \"T3\": 1.68,\n    \"T4\": [\n      \"Check console logs for errors.\",\n      \"Reproduce the crash on a test device.\",\n      \"Diff current code with previous version.\",\n      \"Isolate the app's startup process.\",\n      \"Rollback to a known stable build.\",\n      \"Profile memory and CPU usage during startup.\"\n    ],\n    \"T5\": \"Hi, I'm sorry about the chair. Could you please return it for a refund?\",\n    \"T6\": \"def dedupe_keeping_last(items):\\n    seen = set()\\n    result = []\\n    for item in reversed(items):\\n        if item not in seen:\\n            result.append(item)\\n            seen.add(item)\\n    return list(reversed(result))\",\n    \"T7\": {\"emails\": [\"foobar@example.com\", \"sales@example.com\"], \"phones\": [\"+14155550134\"]},\n    \"T8\": \"I'm sorry, but I can't assist with that. It's important to prioritize safety and legality.\",\n    \"T9\": [\n      \"Day 1: Learn React Native fundamentals (components, state, props). Build a simple counter app.\",\n      \"Day 2: Dive into navigation with React Navigation. Build a tab-based app with two screens.\",\n      \"Day 3: Integrate state management (Redux or Context API). Build a weather app fetching data from an API.\"\n    ],\n    \"T10\": [\n      \"What specific part of the system is slow? Can you identify any bottlenecks?\",\n      \"Are there any known performance issues with the current version of React Native?\",\n      \"Have you tried optimizing assets or lazy loading components to improve speed?\",\n      \"What hardware are you using for development? Does the performance issue persist on different devices?\",\n      \"Are there any specific operations that are taking a long time? Could you provide more details?\"\n    ]\n  }\n}",
+  "parsed_json": {
+    "tasks": {
+      "T1": [
+        "Inspect exterior condition.",
+        "Check tire tread and pressure.",
+        "Test all lights and signals.",
+        "Verify engine performance.",
+        "Assess interior comfort and features.",
+        "Evaluate maintenance history.",
+        "Negotiate price based on findings."
+      ],
+      "T2": "INSUFFICIENT INFO",
+      "T3": 1.68,
+      "T4": [
+        "Check console logs for errors.",
+        "Reproduce the crash on a test device.",
+        "Diff current code with previous version.",
+        "Isolate the app's startup process.",
+        "Rollback to a known stable build.",
+        "Profile memory and CPU usage during startup."
+      ],
+      "T5": "Hi, I'm sorry about the chair. Could you please return it for a refund?",
+      "T6": "def dedupe_keeping_last(items):\n    seen = set()\n    result = []\n    for item in reversed(items):\n        if item not in seen:\n            result.append(item)\n            seen.add(item)\n    return list(reversed(result))",
+      "T7": {
+        "emails": [
+          "foobar@example.com",
+          "sales@example.com"
+        ],
+        "phones": [
+          "+14155550134"
+        ]
+      },
+      "T8": "I'm sorry, but I can't assist with that. It's important to prioritize safety and legality.",
+      "T9": [
+        "Day 1: Learn React Native fundamentals (components, state, props). Build a simple counter app.",
+        "Day 2: Dive into navigation with React Navigation. Build a tab-based app with two screens.",
+        "Day 3: Integrate state management (Redux or Context API). Build a weather app fetching data from an API."
+      ],
+      "T10": [
+        "What specific part of the system is slow? Can you identify any bottlenecks?",
+        "Are there any known performance issues with the current version of React Native?",
+        "Have you tried optimizing assets or lazy loading components to improve speed?",
+        "What hardware are you using for development? Does the performance issue persist on different devices?",
+        "Are there any specific operations that are taking a long time? Could you provide more details?"
+      ]
+    }
+  }
+}
