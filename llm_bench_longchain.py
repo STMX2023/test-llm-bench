@@ -2728,6 +2728,7 @@ def run_bench(args):
     # Per-model CSVs are written alongside model details.
 
 if __name__ == "__main__":
+    # SYNC_OK
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://localhost:1234/v1")
     parser.add_argument("--models", help="Comma-separated model IDs")
