@@ -53,6 +53,7 @@ MAX_CHUNK_READS_PER_FILE = 6
 
 CSV_FIELDS = [
     "model",
+    "benchmark_track",
     "time_sec",
     "overall_score_100",
     "task_success_100",
@@ -696,7 +697,8 @@ class VirtualFileSystem:
         if d in self.protected_dirs:
             return _error_payload("EACCES", f"Permission denied for directory '{d}'.", False, 0)
         matches = []
-        for path, content in self.files.items():
+        for path in sorted(self.files.keys()):
+            content = self.files[path]
             if d and not path.startswith(d + "/"):
                 continue
             if not self.artifacts_unlocked and self._is_artifacts_path(path):
@@ -778,92 +780,91 @@ def _find_json_candidates(text: str) -> List[str]:
                     start = None
     return candidates
 
+def _extract_json_fences(text: str) -> List[str]:
+    return re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+
 def safe_json_parse(text: str) -> Optional[Dict[str, Any]]:
     if not text:
         return None
     text0 = _strip_reasoning_headers(text)
-    
-    # 1. Fence extraction
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text0, re.DOTALL | re.IGNORECASE)
-    if fence:
-        try:
-            return json.loads(fence.group(1))
-        except:
-            pass
-
-    # 2. Candidate scan
-    candidates = _find_json_candidates(text0)
-    for cand in reversed(candidates):
-        try:
-            obj = json.loads(cand)
-            if isinstance(obj, dict) and ("tool" in obj or "action" in obj): # minor heuristic
-                return obj
-        except:
-            continue
-            
-    # 3. Last ditch: try loading the whole thing if it looks like JSON
-    try:
-        return json.loads(text0)
-    except:
+    fences = _extract_json_fences(text0)
+    if not fences:
         return None
+    try:
+        obj = json.loads(fences[-1])
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    tool = obj.get("tool")
+    args = obj.get("args")
+    if tool not in ALLOWED_TOOLS:
+        return None
+    if not isinstance(args, dict):
+        return None
+    return obj
 
 def count_json_objects(text: str) -> int:
     text0 = _strip_reasoning_headers(text)
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text0, re.DOTALL | re.IGNORECASE)
-    if fence:
-        try:
-            obj = json.loads(fence.group(1))
-        except Exception:
-            return 0
-        if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and "args" in obj:
-            return 1
-        return 0
-    candidates = _find_json_candidates(text0)
+    fences = _extract_json_fences(text0)
     count = 0
-    for cand in candidates:
+    for block in fences:
         try:
-            obj = json.loads(cand)
+            obj = json.loads(block)
         except Exception:
             continue
-        if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and "args" in obj:
+        if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and isinstance(obj.get("args"), dict):
             count += 1
     return count
 
 def parse_multi_tool_calls(text: str) -> List[Dict[str, Any]]:
     text0 = _strip_reasoning_headers(text)
     calls: List[Dict[str, Any]] = []
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text0, re.DOTALL | re.IGNORECASE)
-    if fence:
+    for block in _extract_json_fences(text0):
         try:
-            obj = json.loads(fence.group(1))
-            if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and "args" in obj:
-                calls.append(obj)
-            return calls
-        except Exception:
-            return calls
-    for cand in _find_json_candidates(text0):
-        try:
-            obj = json.loads(cand)
-            if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and "args" in obj:
-                calls.append(obj)
+            obj = json.loads(block)
         except Exception:
             continue
+        if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and isinstance(obj.get("args"), dict):
+            calls.append(obj)
     return calls
 
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[^\w\-\.]', '_', name)
 
-def apply_tool_noise(text: str, rng: random.Random, noise_level: float) -> str:
+def apply_tool_noise(text: str, rng: random.Random, noise_level: float, mode: str = "debug") -> str:
     if noise_level <= 0 or rng.random() >= noise_level:
         return text
     try:
         payload = json.loads(text)
     except Exception:
         return text
+    if not isinstance(payload, (dict, list)):
+        return text
+
+    def _inject_fields(obj: Dict[str, Any]) -> Dict[str, Any]:
+        if mode in ("debug", "both"):
+            obj["debug"] = "DEBUG: tool stream stabilized."
+        if mode in ("realistic", "both"):
+            obj["extra"] = "note: payload normalized"
+        items = list(obj.items())
+        rng.shuffle(items)
+        return dict(items)
+
     if isinstance(payload, dict):
-        payload["debug"] = "DEBUG: tool stream stabilized."
-        return json.dumps(payload)
-    return text
+        payload = _inject_fields(payload)
+    else:
+        new_list = []
+        for item in payload:
+            if isinstance(item, dict):
+                new_list.append(_inject_fields(item))
+            else:
+                new_list.append(item)
+        payload = new_list
+
+    if mode in ("realistic", "both") and rng.random() < 0.5:
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    return json.dumps(payload, ensure_ascii=False)
 
 def _should_fail_tool(rng: random.Random, fail_rate: float) -> bool:
     return fail_rate > 0 and rng.random() < fail_rate
@@ -1329,6 +1330,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
         and tool_name in ("read_file", "read_file_chunk")
     ):
         req_path = (tool_args.get("path") or "").strip("./")
+        current_path = vfs.path_sequence[expected_index] if 0 <= expected_index < len(vfs.path_sequence) else None
         expected_tid = _expected_tid_from_path(expected_next)
         fork_active = (
             vfs.fork_present
@@ -1337,7 +1339,13 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             and req_path
             and req_path.startswith(vfs.fork_dir + "/")
         )
-        if req_path and _is_trace_path(req_path) and req_path not in BOOTSTRAP_OK and expected_next:
+        if (
+            tool_name == "read_file_chunk"
+            and current_path
+            and req_path == current_path
+        ):
+            pass
+        elif req_path and _is_trace_path(req_path) and req_path not in BOOTSTRAP_OK and expected_next:
             if (not fork_active) and req_path != expected_next and wrong_read_streak >= int(getattr(config, "strict_grace", 1)):
                 enforced_path = expected_next
                 wrong_read_streak += 1
@@ -1517,7 +1525,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
                 wrong_read_streak = 0
                 explore_per_hop = 0
                 advanced = True
-            elif not fork_active:
+            else:
                 _record_wrong_trace(expected_tid)
         if "secret code" in text_for_tid.lower():
             secret_found = True
@@ -1555,7 +1563,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
                 wrong_read_streak = 0
                 explore_per_hop = 0
                 advanced = True
-            elif not fork_active:
+            else:
                 _record_wrong_trace(expected_tid)
         if advanced and vfs.fork_present and vfs.fork_dead_end_hit and expected_index > (vfs.fork_index or -1):
             vfs.fork_recovered = True
@@ -1661,7 +1669,7 @@ def _quantile(values: List[float], q: float) -> float:
     frac = pos - lo
     return float(vals[lo] + (vals[hi] - vals[lo]) * frac)
 
-def compute_scores(res: Dict[str, Any], weights: Tuple[float, float, float]) -> Dict[str, float]:
+def compute_scores(res: Dict[str, Any], weights: Tuple[float, float, float, float]) -> Dict[str, float]:
     task_success = 1.0 if res.get("task_success") else 0.0
     compliance_success = 1.0 if res.get("compliance_success") else 0.0
 
@@ -1676,6 +1684,7 @@ def compute_scores(res: Dict[str, Any], weights: Tuple[float, float, float]) -> 
     protocol = 100.0 * (j + t + a + o) / 4.0
 
     nav = 100.0 * chain_completion
+    nav -= min(30.0, float(res.get("wrong_trace_reads", 0) or 0) * 2.0)
     nav -= min(25.0, float(res.get("redundant_reads", 0) or 0) * 2.0)
     nav -= min(25.0, float(res.get("explore_over_budget_events", 0) or 0) * 2.0)
     nav -= min(20.0, float(res.get("artifacts_access_before_unlock", 0) or 0) * 5.0)
@@ -1689,6 +1698,9 @@ def compute_scores(res: Dict[str, Any], weights: Tuple[float, float, float]) -> 
     stream_completed = float(res.get("stream_sessions_completed", 0) or 0)
     stream_completion = stream_completed / stream_started if stream_started > 0 else 1.0
     robustness = 100.0 * (0.5 * recovery_rate + 0.5 * stream_completion)
+    honeypot_hits = float(res.get("honeypot_hits", 0) or 0)
+    if honeypot_hits:
+        robustness = max(0.0, robustness - min(30.0, honeypot_hits * 10.0))
     abandoned = res.get("stream_abandoned_paths", [])
     abandoned_count = len(abandoned) if isinstance(abandoned, list) else float(abandoned or 0)
     if abandoned_count:
@@ -1701,8 +1713,13 @@ def compute_scores(res: Dict[str, Any], weights: Tuple[float, float, float]) -> 
     else:
         efficiency = 0.0
 
-    w_protocol, w_nav, w_robust = weights
-    overall = (protocol * w_protocol) + (nav_with_task * w_nav) + (robustness * w_robust)
+    w_task, w_protocol, w_robust, w_eff = weights
+    overall = (
+        (100.0 * task_success * w_task)
+        + (protocol * w_protocol)
+        + (robustness * w_robust)
+        + (efficiency * w_eff)
+    )
     return {
         "overall_score_100": round(overall, 2),
         "task_success_100": round(100.0 * task_success, 2),
@@ -2030,6 +2047,13 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
             return False
         checksum = hashlib.sha256(vfs.solution_content.encode("utf-8")).hexdigest()
         return checksum == vfs.secret_checksum
+
+    def _failure_code_for_exec(exec_res: Dict[str, Any]) -> Optional[str]:
+        if exec_res.get("tool_timed_out"):
+            return "E_TIMEOUT"
+        if exec_res.get("enforced_path"):
+            return "E_STRICT_BLOCK"
+        return None
     
     print(
         f"Starting loop for {model}. Chain length: {config.chain_length} | Decoys: {config.decoy_count} | "
@@ -2073,13 +2097,15 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
             tool_call = safe_json_parse(completion)
             json_count = count_json_objects(completion)
             tool_calls_batch = None
+            parse_failure_code = None
             
-            if not tool_call or "tool" not in tool_call:
+            if not tool_call:
                 # Failure to produce tool call
                 # We give one hint if it's the first time, else fail?
                 # Actually, let's just feed back "Error: No valid JSON tool call found."
                 print(f"    -> Invalid Output (No JSON)")
                 err_msg = "Error: I could not parse a valid JSON tool call. Please format your response as a JSON object with 'tool' and 'args' keys."
+                parse_failure_code = "E_PARSE"
                 messages.append({"role": "user", "content": err_msg})
                 transcript.append({
                     "step": steps,
@@ -2091,6 +2117,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "permission_denied": False,
                     "blocked_submit": False,
                     "enforced_path": None,
+                    "failure_code": parse_failure_code,
                     "tool_retries": 0,
                     "tool_latency_ms": 0,
                     "tool_timed_out": False,
@@ -2104,7 +2131,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         "success": False,
                         "task_success": False,
                         "compliance_success": _compliance_success(),
-                        "failure_reason": "Failed to output valid JSON consistently",
+                        "failure_reason": parse_failure_code,
                         "steps_taken": steps,
                         "last_tool_output": "N/A",
                         "chain_length": config.chain_length,
@@ -2161,6 +2188,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
             effective_reject = config.reject_multi_tool and not config.allow_parallel_tools
             if config.production_guards and effective_reject and json_count > 1:
                 err_msg = "Error: Multiple tool calls detected. Please return exactly one tool call."
+                parse_failure_code = "E_MULTITOOL"
                 messages.append({"role": "user", "content": err_msg})
                 transcript.append({
                     "step": steps,
@@ -2172,6 +2200,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "permission_denied": False,
                     "blocked_submit": False,
                     "enforced_path": None,
+                    "failure_code": parse_failure_code,
                     "tool_retries": 0,
                     "tool_latency_ms": 0,
                     "tool_timed_out": False,
@@ -2185,7 +2214,31 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 tool_calls_batch = parse_multi_tool_calls(completion)
 
             tool_name = tool_call.get("tool")
-            tool_args = tool_call.get("args", {})
+            tool_args = tool_call.get("args")
+            if tool_name not in ALLOWED_TOOLS or not isinstance(tool_args, dict):
+                err_msg = "Error: Tool call must include a valid 'tool' and an 'args' object."
+                parse_failure_code = "E_SCHEMA"
+                messages.append({"role": "user", "content": err_msg})
+                transcript.append({
+                    "step": steps,
+                    "model_output": completion,
+                    "tool_call": None,
+                    "tool_result": err_msg,
+                    "expected_next": expected_next,
+                    "tool_failed": False,
+                    "permission_denied": False,
+                    "blocked_submit": False,
+                    "enforced_path": None,
+                    "failure_code": parse_failure_code,
+                    "tool_retries": 0,
+                    "tool_latency_ms": 0,
+                    "tool_timed_out": False,
+                    "tool_chunks": None,
+                    "rejected_multi_tool": False,
+                    "tool_elapsed_ms": 0,
+                    **_stream_snapshot()
+                })
+                continue
             print(f"    -> Tool: {tool_name} {tool_args}")
             
             tool_start = time.perf_counter()
@@ -2203,6 +2256,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 step_stream_started_paths = []
                 step_stream_completed_paths = []
                 step_world_changed = []
+                step_failure_codes = []
                 finished = False
                 for idx, call in enumerate(tool_calls_batch):
                     call_tool = call.get("tool")
@@ -2291,6 +2345,9 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         step_enforced_path = exec_res["enforced_path"]
                     if exec_res["tool_timed_out"]:
                         step_tool_timed_out = True
+                    failure_code = _failure_code_for_exec(exec_res)
+                    if failure_code:
+                        step_failure_codes.append(failure_code)
                     if not exec_res["tool_failed"] and isinstance(exec_res["result"], str) and not _is_error_payload(exec_res["result"]):
                         if pending_error_recovery > 0 and not hint_since_error:
                             tool_error_recovery_success += 1
@@ -2311,13 +2368,14 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 tool_elapsed_ms = int((time.perf_counter() - tool_start) * 1000)
                 print(f"    -> Result: {str(batch_results)[:100]}...")
                 batch_payload = json.dumps(batch_results, ensure_ascii=False)
-                last_tool_output = batch_payload
-                messages.append({"role": "user", "content": batch_payload})
+                noisy_batch_payload = apply_tool_noise(batch_payload, vfs.rng, config.noise_level, mode=config.noise_mode)
+                last_tool_output = noisy_batch_payload
+                messages.append({"role": "user", "content": noisy_batch_payload})
                 transcript.append({
                     "step": steps,
                     "model_output": completion,
                     "tool_call": tool_calls_batch,
-                    "tool_result": batch_results,
+                    "tool_result": noisy_batch_payload,
                     "tool_chunks": step_tool_chunks,
                     "expected_next": expected_next,
                     "tool_failed": step_tool_failed,
@@ -2328,6 +2386,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_latency_ms": 0,
                     "tool_timed_out": step_tool_timed_out,
                     "rejected_multi_tool": False,
+                    "failure_code": step_failure_codes or None,
                     "parallel_tools": True,
                     "tool_elapsed_ms": tool_elapsed_ms,
                     "stream_started_paths": step_stream_started_paths,
@@ -2418,20 +2477,23 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 result = exec_res["result"]
                 tool_chunks = exec_res["tool_chunks"]
                 finished = exec_res["finished"]
+                failure_code = _failure_code_for_exec(exec_res)
                 print(f"    -> Result: {str(result)[:100]}...")
-                last_tool_output = result
-                messages.append({"role": "user", "content": result})
+                noisy_result = apply_tool_noise(result, vfs.rng, config.noise_level, mode=config.noise_mode)
+                last_tool_output = noisy_result
+                messages.append({"role": "user", "content": noisy_result})
                 transcript.append({
                     "step": steps,
                     "model_output": completion,
                     "tool_call": tool_call,
-                    "tool_result": result,
+                    "tool_result": noisy_result,
                     "tool_chunks": tool_chunks,
                     "expected_next": expected_next,
                     "tool_failed": exec_res["tool_failed"],
                     "permission_denied": exec_res["permission_denied"],
                     "blocked_submit": exec_res["blocked_submit"],
                     "enforced_path": exec_res["enforced_path"],
+                    "failure_code": failure_code,
                     "tool_retries": exec_res["retries"],
                     "tool_latency_ms": exec_res["latency_ms"],
                     "tool_timed_out": exec_res["tool_timed_out"],
@@ -2626,6 +2688,559 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
     }
 
 # --------------------------------------------------------------------------------
+# BASELINES
+# --------------------------------------------------------------------------------
+
+def run_baseline_oracle(config: argparse.Namespace, seed_override: Optional[int] = None) -> Dict[str, Any]:
+    vfs = VirtualFileSystem(
+        chain_length=config.chain_length,
+        decoy_count=config.decoy_count,
+        ambiguity_rate=config.ambiguity_rate,
+        permission_deny_rate=config.permission_deny_rate,
+        long_file_rate=config.long_file_rate,
+        mode=config.mode,
+        seed=seed_override if seed_override is not None else config.seed
+    )
+    vfs.max_chunk_reads_per_file = config.max_chunk_reads_per_file
+    steps = 0
+    total_tokens = 0
+    start_time = time.time()
+    expected_index = -1
+    last_tool_output = ""
+    secret_found = False
+    secret_code_seen = None
+    wrong_read_streak = 0
+    wrong_trace_reads = 0
+    explore_per_hop = 0
+    explore_total = 0
+    explore_over_budget_events = 0
+    memory_store = {}
+    checkpoints = {}
+
+    json_valid = 0
+    tool_valid = 0
+    args_valid = 0
+    schema_valid = 0
+    output_schema_valid = 0
+    path_correct = 0
+    list_files_calls = 0
+    read_file_calls = 0
+    read_file_chunk_calls = 0
+    write_file_calls = 0
+    search_text_calls = 0
+    api_lookup_calls = 0
+    submit_attempts = 0
+    blocked_submit_attempts = 0
+    tool_failed_events = 0
+    tool_error_recovery_success = 0
+    pending_error_recovery = 0
+    honeypot_hits = 0
+    all_read_paths = set()
+    read_file_paths = set()
+    redundant_reads = 0
+    artifacts_access_before_unlock = 0
+    stream_sessions_started = 0
+    stream_sessions_completed = 0
+    active_streams = set()
+
+    transcript = []
+
+    def _read_file_text(res: Any) -> str:
+        if not isinstance(res, str):
+            return ""
+        try:
+            obj = json.loads(res)
+            if isinstance(obj, dict):
+                if "content" in obj and isinstance(obj.get("content"), str):
+                    return obj.get("content") or ""
+                if "chunk" in obj and isinstance(obj.get("chunk"), str):
+                    return obj.get("chunk") or ""
+        except Exception:
+            return res
+        return res
+
+    def _track_artifacts_access(tool_name: str, tool_args: Dict[str, Any]):
+        nonlocal artifacts_access_before_unlock
+        if vfs.artifacts_unlocked:
+            return
+        if tool_name in ("list_files", "search_text", "glob", "tree"):
+            target = tool_args.get("directory", "")
+        elif tool_name in ("read_file", "read_file_chunk", "read_json", "stat"):
+            target = tool_args.get("path", "")
+        else:
+            return
+        if vfs._is_artifacts_path(target):
+            artifacts_access_before_unlock += 1
+
+    def _track_streaming(exec_res: Dict[str, Any]):
+        nonlocal stream_sessions_started, stream_sessions_completed
+        start_path = exec_res.get("stream_started_path")
+        done_path = exec_res.get("stream_completed_path")
+        if start_path:
+            p = start_path.strip("./")
+            if p not in active_streams:
+                stream_sessions_started += 1
+                active_streams.add(p)
+        if done_path:
+            p = done_path.strip("./")
+            if p in active_streams or (start_path and p == start_path.strip("./")):
+                stream_sessions_completed += 1
+                active_streams.discard(p)
+
+    def _exec(tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        nonlocal steps, expected_index, wrong_read_streak, wrong_trace_reads, explore_per_hop, explore_total
+        nonlocal explore_over_budget_events, secret_found, secret_code_seen, last_tool_output, json_valid
+        nonlocal tool_valid, args_valid, schema_valid, output_schema_valid, tool_failed_events, path_correct
+        nonlocal tool_error_recovery_success, pending_error_recovery, redundant_reads
+        nonlocal list_files_calls, read_file_calls, read_file_chunk_calls, write_file_calls, search_text_calls
+        nonlocal api_lookup_calls, submit_attempts, blocked_submit_attempts, honeypot_hits
+
+        steps += 1
+        json_valid += 1
+        tool_valid += 1
+        args_valid += 1
+        if _schema_valid(tool_name, tool_args):
+            schema_valid += 1
+
+        if tool_name == "list_files":
+            list_files_calls += 1
+        elif tool_name == "read_file":
+            read_file_calls += 1
+            p = tool_args.get("path", "").strip("./")
+            if p:
+                if p in read_file_paths:
+                    redundant_reads += 1
+                else:
+                    read_file_paths.add(p)
+                all_read_paths.add(p)
+        elif tool_name == "read_file_chunk":
+            read_file_chunk_calls += 1
+            p = tool_args.get("path", "").strip("./")
+            if p:
+                all_read_paths.add(p)
+        elif tool_name == "write_file":
+            write_file_calls += 1
+        elif tool_name == "search_text":
+            search_text_calls += 1
+        elif tool_name == "api_lookup":
+            api_lookup_calls += 1
+        elif tool_name == "submit_answer":
+            submit_attempts += 1
+
+        _track_artifacts_access(tool_name, tool_args)
+        expected_next = None
+        if expected_index + 1 < len(vfs.path_sequence):
+            expected_next = vfs.path_sequence[expected_index + 1]
+        ctx = {
+            "config": config,
+            "vfs": vfs,
+            "expected_next": expected_next,
+            "expected_index": expected_index,
+            "wrong_read_streak": wrong_read_streak,
+            "wrong_trace_reads": wrong_trace_reads,
+            "explore_per_hop": explore_per_hop,
+            "explore_total": explore_total,
+            "explore_over_budget_events": explore_over_budget_events,
+            "secret_found": secret_found,
+            "secret_code_seen": secret_code_seen,
+            "memory_store": memory_store,
+            "checkpoints": checkpoints,
+            "messages": [],
+        }
+        exec_res = execute_tool(tool_name, tool_args, ctx, allow_advance=True)
+        expected_index = exec_res["expected_index"]
+        wrong_read_streak = exec_res["wrong_read_streak"]
+        wrong_trace_reads = exec_res["wrong_trace_reads"]
+        explore_per_hop = exec_res["explore_per_hop"]
+        explore_total = exec_res["explore_total"]
+        explore_over_budget_events = exec_res["explore_over_budget_events"]
+        secret_found = exec_res["secret_found"]
+        secret_code_seen = exec_res["secret_code_seen"]
+        _track_streaming(exec_res)
+        if exec_res["advanced"]:
+            path_correct += 1
+        if _output_schema_valid(tool_name, exec_res["result"]):
+            output_schema_valid += 1
+        if exec_res["tool_failed"]:
+            tool_failed_events += 1
+            pending_error_recovery += 1
+        if not exec_res["tool_failed"] and isinstance(exec_res["result"], str) and not _is_error_payload(exec_res["result"]):
+            if pending_error_recovery > 0:
+                tool_error_recovery_success += 1
+                pending_error_recovery -= 1
+        if exec_res["blocked_submit"]:
+            blocked_submit_attempts += 1
+        if exec_res["honeypot_hit"]:
+            honeypot_hits += 1
+        last_tool_output = exec_res["result"]
+        transcript.append({
+            "step": steps,
+            "tool_call": {"tool": tool_name, "args": tool_args},
+            "tool_result": exec_res["result"],
+            "expected_next": expected_next,
+            "tool_failed": exec_res["tool_failed"],
+            "permission_denied": exec_res["permission_denied"],
+            "blocked_submit": exec_res["blocked_submit"],
+            "enforced_path": exec_res["enforced_path"],
+            "tool_retries": exec_res["retries"],
+            "tool_latency_ms": exec_res["latency_ms"],
+            "tool_timed_out": exec_res["tool_timed_out"],
+            "tool_chunks": exec_res["tool_chunks"],
+        })
+        return exec_res
+
+    _exec("read_file", {"path": "start_instructions.txt"})
+    _exec("read_file", {"path": "task.md"})
+    readme_res = _exec("read_file", {"path": "readme.md"})
+    readme_text = _read_file_text(readme_res.get("result"))
+    codename = None
+    m = re.search(r"Codename:\s*([A-Za-z0-9_-]+)", readme_text)
+    if m:
+        codename = m.group(1).lower()
+    for p in vfs.path_sequence:
+        _exec("read_file", {"path": p})
+
+    if codename:
+        index_path = f"artifacts/{codename}/index.txt"
+        index_res = _exec("read_file", {"path": index_path})
+        index_text = _read_file_text(index_res.get("result"))
+        chunk_paths = [line.strip() for line in index_text.splitlines() if line.strip()]
+        chunks = []
+        for cp in chunk_paths:
+            chunk_res = _exec("read_file", {"path": cp})
+            chunk_text = _read_file_text(chunk_res.get("result"))
+            m = re.search(r"SECRET_CHUNK=([A-Za-z0-9_\\-]+)", chunk_text)
+            if m:
+                chunks.append(m.group(1))
+        secret = "".join(chunks) if chunks else vfs.secret_code
+        _exec("write_file", {"path": vfs.solution_path, "content": secret})
+        submit_res = _exec("submit_answer", {"answer": secret})
+    else:
+        submit_res = _exec("submit_answer", {"answer": "UNKNOWN"})
+
+    success = bool(submit_res.get("finished"))
+    return {
+        "success": success,
+        "task_success": success,
+        "compliance_success": success,
+        "steps_taken": steps,
+        "time_sec": time.time() - start_time,
+        "total_tokens": total_tokens,
+        "failure_reason": None if success else "baseline_incomplete",
+        "chain_length": config.chain_length,
+        "decoy_count": config.decoy_count,
+        "ambiguity_rate": config.ambiguity_rate,
+        "noise_level": config.noise_level,
+        "tool_failure_rate": config.tool_failure_rate,
+        "permission_deny_rate": config.permission_deny_rate,
+        "stream_rate": config.stream_rate,
+        "api_rate_limit": config.api_rate_limit,
+        "api_rate_window_sec": config.api_rate_window_sec,
+        "tool_min_latency_ms": config.tool_min_latency_ms,
+        "tool_max_latency_ms": config.tool_max_latency_ms,
+        "tool_timeout_ms": config.tool_timeout_ms,
+        "read_max_bytes": config.read_max_bytes,
+        "read_truncate_rate": config.read_truncate_rate,
+        "long_file_rate": config.long_file_rate,
+        "concurrent_change_rate": config.concurrent_change_rate,
+        "seed": vfs.seed,
+        "json_valid_rate": json_valid / steps if steps else 0,
+        "tool_valid_rate": tool_valid / steps if steps else 0,
+        "args_valid_rate": args_valid / steps if steps else 0,
+        "schema_valid_rate": schema_valid / steps if steps else 0,
+        "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
+        "path_correct_rate": path_correct / max(1, config.chain_length),
+        "artifacts_access_before_unlock": artifacts_access_before_unlock,
+        "wrong_trace_reads": wrong_trace_reads,
+        "explore_over_budget_events": explore_over_budget_events,
+        "fork_present": vfs.fork_present,
+        "fork_wrong_branch_reads": vfs.fork_wrong_branch_reads,
+        "fork_dead_end_hit": vfs.fork_dead_end_hit,
+        "fork_recovered": vfs.fork_recovered,
+        "stream_sessions_started": stream_sessions_started,
+        "stream_sessions_completed": stream_sessions_completed,
+        "stream_abandoned_paths": sorted(active_streams),
+        "unique_files_read": len(all_read_paths),
+        "redundant_reads": redundant_reads,
+        "list_files_calls": list_files_calls,
+        "read_file_calls": read_file_calls,
+        "read_file_chunk_calls": read_file_chunk_calls,
+        "write_file_calls": write_file_calls,
+        "search_text_calls": search_text_calls,
+        "api_lookup_calls": api_lookup_calls,
+        "submit_attempts": submit_attempts,
+        "blocked_submit_attempts": blocked_submit_attempts,
+        "tool_failed_events": tool_failed_events,
+        "tool_error_recovery_success": tool_error_recovery_success,
+        "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
+        "honeypot_hits": honeypot_hits,
+        "last_tool_output": last_tool_output,
+        "transcript": transcript
+    }
+
+def run_baseline_random(config: argparse.Namespace, seed_override: Optional[int] = None) -> Dict[str, Any]:
+    vfs = VirtualFileSystem(
+        chain_length=config.chain_length,
+        decoy_count=config.decoy_count,
+        ambiguity_rate=config.ambiguity_rate,
+        permission_deny_rate=config.permission_deny_rate,
+        long_file_rate=config.long_file_rate,
+        mode=config.mode,
+        seed=seed_override if seed_override is not None else config.seed
+    )
+    vfs.max_chunk_reads_per_file = config.max_chunk_reads_per_file
+    steps = 0
+    total_tokens = 0
+    start_time = time.time()
+    expected_index = -1
+    last_tool_output = ""
+    secret_found = False
+    secret_code_seen = None
+    wrong_read_streak = 0
+    wrong_trace_reads = 0
+    explore_per_hop = 0
+    explore_total = 0
+    explore_over_budget_events = 0
+    memory_store = {}
+    checkpoints = {}
+
+    json_valid = 0
+    tool_valid = 0
+    args_valid = 0
+    schema_valid = 0
+    output_schema_valid = 0
+    path_correct = 0
+    list_files_calls = 0
+    read_file_calls = 0
+    read_file_chunk_calls = 0
+    write_file_calls = 0
+    search_text_calls = 0
+    api_lookup_calls = 0
+    submit_attempts = 0
+    blocked_submit_attempts = 0
+    tool_failed_events = 0
+    tool_error_recovery_success = 0
+    pending_error_recovery = 0
+    honeypot_hits = 0
+    all_read_paths = set()
+    read_file_paths = set()
+    redundant_reads = 0
+    artifacts_access_before_unlock = 0
+    stream_sessions_started = 0
+    stream_sessions_completed = 0
+    active_streams = set()
+
+    transcript = []
+
+    all_paths = sorted(vfs.all_paths)
+    dirs = sorted({p.split("/", 1)[0] for p in all_paths if "/" in p} | {""})
+
+    def _track_artifacts_access(tool_name: str, tool_args: Dict[str, Any]):
+        nonlocal artifacts_access_before_unlock
+        if vfs.artifacts_unlocked:
+            return
+        if tool_name in ("list_files", "search_text", "glob", "tree"):
+            target = tool_args.get("directory", "")
+        elif tool_name in ("read_file", "read_file_chunk", "read_json", "stat"):
+            target = tool_args.get("path", "")
+        else:
+            return
+        if vfs._is_artifacts_path(target):
+            artifacts_access_before_unlock += 1
+
+    def _track_streaming(exec_res: Dict[str, Any]):
+        nonlocal stream_sessions_started, stream_sessions_completed
+        start_path = exec_res.get("stream_started_path")
+        done_path = exec_res.get("stream_completed_path")
+        if start_path:
+            p = start_path.strip("./")
+            if p not in active_streams:
+                stream_sessions_started += 1
+                active_streams.add(p)
+        if done_path:
+            p = done_path.strip("./")
+            if p in active_streams or (start_path and p == start_path.strip("./")):
+                stream_sessions_completed += 1
+                active_streams.discard(p)
+
+    def _exec(tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        nonlocal steps, expected_index, wrong_read_streak, wrong_trace_reads, explore_per_hop, explore_total
+        nonlocal explore_over_budget_events, secret_found, secret_code_seen, last_tool_output, json_valid
+        nonlocal tool_valid, args_valid, schema_valid, output_schema_valid, tool_failed_events, path_correct
+        nonlocal tool_error_recovery_success, pending_error_recovery, redundant_reads
+        nonlocal list_files_calls, read_file_calls, read_file_chunk_calls, write_file_calls, search_text_calls
+        nonlocal api_lookup_calls, submit_attempts, blocked_submit_attempts, honeypot_hits
+
+        steps += 1
+        json_valid += 1
+        tool_valid += 1
+        args_valid += 1
+        if _schema_valid(tool_name, tool_args):
+            schema_valid += 1
+
+        if tool_name == "list_files":
+            list_files_calls += 1
+        elif tool_name == "read_file":
+            read_file_calls += 1
+            p = tool_args.get("path", "").strip("./")
+            if p:
+                if p in read_file_paths:
+                    redundant_reads += 1
+                else:
+                    read_file_paths.add(p)
+                all_read_paths.add(p)
+        elif tool_name == "read_file_chunk":
+            read_file_chunk_calls += 1
+            p = tool_args.get("path", "").strip("./")
+            if p:
+                all_read_paths.add(p)
+        elif tool_name == "write_file":
+            write_file_calls += 1
+        elif tool_name == "search_text":
+            search_text_calls += 1
+        elif tool_name == "api_lookup":
+            api_lookup_calls += 1
+        elif tool_name == "submit_answer":
+            submit_attempts += 1
+
+        _track_artifacts_access(tool_name, tool_args)
+        expected_next = None
+        if expected_index + 1 < len(vfs.path_sequence):
+            expected_next = vfs.path_sequence[expected_index + 1]
+        ctx = {
+            "config": config,
+            "vfs": vfs,
+            "expected_next": expected_next,
+            "expected_index": expected_index,
+            "wrong_read_streak": wrong_read_streak,
+            "wrong_trace_reads": wrong_trace_reads,
+            "explore_per_hop": explore_per_hop,
+            "explore_total": explore_total,
+            "explore_over_budget_events": explore_over_budget_events,
+            "secret_found": secret_found,
+            "secret_code_seen": secret_code_seen,
+            "memory_store": memory_store,
+            "checkpoints": checkpoints,
+            "messages": [],
+        }
+        exec_res = execute_tool(tool_name, tool_args, ctx, allow_advance=True)
+        expected_index = exec_res["expected_index"]
+        wrong_read_streak = exec_res["wrong_read_streak"]
+        wrong_trace_reads = exec_res["wrong_trace_reads"]
+        explore_per_hop = exec_res["explore_per_hop"]
+        explore_total = exec_res["explore_total"]
+        explore_over_budget_events = exec_res["explore_over_budget_events"]
+        secret_found = exec_res["secret_found"]
+        secret_code_seen = exec_res["secret_code_seen"]
+        _track_streaming(exec_res)
+        if exec_res["advanced"]:
+            path_correct += 1
+        if _output_schema_valid(tool_name, exec_res["result"]):
+            output_schema_valid += 1
+        if exec_res["tool_failed"]:
+            tool_failed_events += 1
+            pending_error_recovery += 1
+        if not exec_res["tool_failed"] and isinstance(exec_res["result"], str) and not _is_error_payload(exec_res["result"]):
+            if pending_error_recovery > 0:
+                tool_error_recovery_success += 1
+                pending_error_recovery -= 1
+        if exec_res["blocked_submit"]:
+            blocked_submit_attempts += 1
+        if exec_res["honeypot_hit"]:
+            honeypot_hits += 1
+        last_tool_output = exec_res["result"]
+        transcript.append({
+            "step": steps,
+            "tool_call": {"tool": tool_name, "args": tool_args},
+            "tool_result": exec_res["result"],
+            "expected_next": expected_next,
+            "tool_failed": exec_res["tool_failed"],
+            "permission_denied": exec_res["permission_denied"],
+            "blocked_submit": exec_res["blocked_submit"],
+            "enforced_path": exec_res["enforced_path"],
+            "tool_retries": exec_res["retries"],
+            "tool_latency_ms": exec_res["latency_ms"],
+            "tool_timed_out": exec_res["tool_timed_out"],
+            "tool_chunks": exec_res["tool_chunks"],
+        })
+        return exec_res
+
+    while steps < MAX_STEPS:
+        tool_choice = vfs.rng.choice(["read_file", "list_files", "stat"])
+        if tool_choice == "read_file":
+            target = vfs.rng.choice(all_paths)
+            _exec("read_file", {"path": target})
+        elif tool_choice == "list_files":
+            target = vfs.rng.choice(dirs)
+            _exec("list_files", {"directory": target or "."})
+        else:
+            target = vfs.rng.choice(all_paths)
+            _exec("stat", {"path": target})
+        if vfs.solution_written and secret_found:
+            break
+
+    submit_res = _exec("submit_answer", {"answer": "OMEGA_000"})
+    success = bool(submit_res.get("finished"))
+    return {
+        "success": success,
+        "task_success": success,
+        "compliance_success": success,
+        "steps_taken": steps,
+        "time_sec": time.time() - start_time,
+        "total_tokens": total_tokens,
+        "failure_reason": None if success else "baseline_incomplete",
+        "chain_length": config.chain_length,
+        "decoy_count": config.decoy_count,
+        "ambiguity_rate": config.ambiguity_rate,
+        "noise_level": config.noise_level,
+        "tool_failure_rate": config.tool_failure_rate,
+        "permission_deny_rate": config.permission_deny_rate,
+        "stream_rate": config.stream_rate,
+        "api_rate_limit": config.api_rate_limit,
+        "api_rate_window_sec": config.api_rate_window_sec,
+        "tool_min_latency_ms": config.tool_min_latency_ms,
+        "tool_max_latency_ms": config.tool_max_latency_ms,
+        "tool_timeout_ms": config.tool_timeout_ms,
+        "read_max_bytes": config.read_max_bytes,
+        "read_truncate_rate": config.read_truncate_rate,
+        "long_file_rate": config.long_file_rate,
+        "concurrent_change_rate": config.concurrent_change_rate,
+        "seed": vfs.seed,
+        "json_valid_rate": json_valid / steps if steps else 0,
+        "tool_valid_rate": tool_valid / steps if steps else 0,
+        "args_valid_rate": args_valid / steps if steps else 0,
+        "schema_valid_rate": schema_valid / steps if steps else 0,
+        "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
+        "path_correct_rate": path_correct / max(1, config.chain_length),
+        "artifacts_access_before_unlock": artifacts_access_before_unlock,
+        "wrong_trace_reads": wrong_trace_reads,
+        "explore_over_budget_events": explore_over_budget_events,
+        "fork_present": vfs.fork_present,
+        "fork_wrong_branch_reads": vfs.fork_wrong_branch_reads,
+        "fork_dead_end_hit": vfs.fork_dead_end_hit,
+        "fork_recovered": vfs.fork_recovered,
+        "stream_sessions_started": stream_sessions_started,
+        "stream_sessions_completed": stream_sessions_completed,
+        "stream_abandoned_paths": sorted(active_streams),
+        "unique_files_read": len(all_read_paths),
+        "redundant_reads": redundant_reads,
+        "list_files_calls": list_files_calls,
+        "read_file_calls": read_file_calls,
+        "read_file_chunk_calls": read_file_chunk_calls,
+        "write_file_calls": write_file_calls,
+        "search_text_calls": search_text_calls,
+        "api_lookup_calls": api_lookup_calls,
+        "submit_attempts": submit_attempts,
+        "blocked_submit_attempts": blocked_submit_attempts,
+        "tool_failed_events": tool_failed_events,
+        "tool_error_recovery_success": tool_error_recovery_success,
+        "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
+        "honeypot_hits": honeypot_hits,
+        "last_tool_output": last_tool_output,
+        "transcript": transcript
+    }
+
+# --------------------------------------------------------------------------------
 # MAIN
 # --------------------------------------------------------------------------------
 
@@ -2663,97 +3278,124 @@ def run_bench(args):
             sys.exit(1)
 
     results = []
-    weights_total = args.w_core + args.w_tool + args.w_eff
+    if isinstance(args.benchmark_track, str):
+        if args.benchmark_track == "both":
+            args.benchmark_track = ["rail", "auto"]
+        else:
+            args.benchmark_track = [args.benchmark_track]
+    if args.baselines:
+        models.extend(["baseline_oracle", "baseline_random"])
+    weights_total = args.w_task + args.w_protocol + args.w_robust + args.w_eff
     weights = (
-        args.w_core / weights_total,
-        args.w_tool / weights_total,
+        args.w_task / weights_total,
+        args.w_protocol / weights_total,
+        args.w_robust / weights_total,
         args.w_eff / weights_total,
     )
     
     for m in models:
-        print(f"\nExample Run: {m}")
-        trial_results = []
-        seeds = []
-        for i in range(args.trials):
-            seed = (args.seed + i) if args.seed is not None else random.randint(1, 1_000_000_000)
-            seeds.append(seed)
-            res = run_agent_loop(m, args.base_url, args, seed_override=seed)
-            res["model"] = m
-            res["tokens_per_sec"] = res.get("total_tokens", 0) / res.get("time_sec", 1) if res.get("time_sec") else 0
-            res.update(compute_scores(res, weights))
-            res["robustness_stddev_overall"] = 0.0
-            res["robustness_stddev_task"] = 0.0
-            res["robustness_stddev_fidelity"] = 0.0
-            res["robustness_stddev_tool"] = 0.0
-            res["robustness_stddev_robustness"] = 0.0
-            res["robustness_stddev_efficiency"] = 0.0
-            res["trials"] = 1
-            res["seeds"] = str(seed)
-            trial_results.append(res)
+        for benchmark_track in args.benchmark_track:
+            run_args = deepcopy(args)
+            run_args.benchmark_track = benchmark_track
+            if benchmark_track == "rail":
+                run_args.strict_follow = True
+            elif benchmark_track == "auto":
+                run_args.strict_follow = False
 
-        safe_name = sanitize_filename(m)
-        out_dir = os.path.join(args.out_dir, safe_name)
-        os.makedirs(out_dir, exist_ok=True)
+            print(f"\nExample Run: {m} [{benchmark_track}]")
+            trial_results = []
+            seeds = []
+            for i in range(run_args.trials):
+                seed = (run_args.seed + i) if run_args.seed is not None else random.randint(1, 1_000_000_000)
+                seeds.append(seed)
+                if m == "baseline_oracle":
+                    res = run_baseline_oracle(run_args, seed_override=seed)
+                elif m == "baseline_random":
+                    res = run_baseline_random(run_args, seed_override=seed)
+                else:
+                    res = run_agent_loop(m, run_args.base_url, run_args, seed_override=seed)
+                res["model"] = m
+                res["benchmark_track"] = benchmark_track
+                res["tokens_per_sec"] = res.get("total_tokens", 0) / res.get("time_sec", 1) if res.get("time_sec") else 0
+                res.update(compute_scores(res, weights))
+                res["robustness_stddev_overall"] = 0.0
+                res["robustness_stddev_task"] = 0.0
+                res["robustness_stddev_fidelity"] = 0.0
+                res["robustness_stddev_tool"] = 0.0
+                res["robustness_stddev_robustness"] = 0.0
+                res["robustness_stddev_efficiency"] = 0.0
+                res["trials"] = 1
+                res["seeds"] = str(seed)
+                trial_results.append(res)
 
-        if args.trials == 1:
-            res = trial_results[0]
-            results.append(res)
-            results_file = os.path.join(out_dir, "results_longchain.csv")
-            file_exists = os.path.exists(results_file)
-            mode = "a" if args.append and file_exists else "w"
-            with open(results_file, mode, newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-                if mode == "w":
-                    w.writeheader()
-                w.writerow({k: res.get(k, "") for k in CSV_FIELDS})
-            table_file = os.path.join(out_dir, "results_longchain.table.txt")
-            with open(table_file, "w", encoding="utf-8") as f:
-                f.write(render_table([res], CSV_FIELDS))
-            trial_dir = os.path.join(out_dir, "trial_01")
-            os.makedirs(trial_dir, exist_ok=True)
-            with open(os.path.join(trial_dir, "details.json"), "w", encoding="utf-8") as f:
-                json.dump({
+            safe_name = sanitize_filename(m)
+            out_dir = os.path.join(args.out_dir, benchmark_track, safe_name)
+            os.makedirs(out_dir, exist_ok=True)
+
+            if run_args.trials == 1:
+                res = trial_results[0]
+                results.append(res)
+                results_file = os.path.join(out_dir, "results_longchain.csv")
+                file_exists = os.path.exists(results_file)
+                mode = "a" if run_args.append and file_exists else "w"
+                with open(results_file, mode, newline="", encoding="utf-8") as f:
+                    w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                    if mode == "w":
+                        w.writeheader()
+                    w.writerow({k: res.get(k, "") for k in CSV_FIELDS})
+                table_file = os.path.join(out_dir, "results_longchain.table.txt")
+                with open(table_file, "w", encoding="utf-8") as f:
+                    f.write(render_table([res], CSV_FIELDS))
+                trial_dir = os.path.join(out_dir, "trial_01")
+                os.makedirs(trial_dir, exist_ok=True)
+                with open(os.path.join(trial_dir, "details.json"), "w", encoding="utf-8") as f:
+                    json.dump({
+                        "model": m,
+                        "time_sec": res.get("time_sec"),
+                        "usage": {"total_tokens": res.get("total_tokens", 0)},
+                        "result": res,
+                    }, f, indent=2, ensure_ascii=False)
+                with open(os.path.join(trial_dir, "transcript.json"), "w", encoding="utf-8") as f:
+                    json.dump(res.get("transcript", []), f, indent=2, ensure_ascii=False)
+                details = {
                     "model": m,
-                    "time_sec": res.get("time_sec"),
-                    "usage": {"total_tokens": res.get("total_tokens", 0)},
-                    "result": res,
-                }, f, indent=2, ensure_ascii=False)
-            with open(os.path.join(trial_dir, "transcript.json"), "w", encoding="utf-8") as f:
-                json.dump(res.get("transcript", []), f, indent=2, ensure_ascii=False)
-            details = {
-                "model": m,
-                "weights": {
-                    "protocol": weights[0],
-                    "navigation": weights[1],
-                    "robustness": weights[2],
-                },
-                "aggregate": res,
-                "trials": [
-                    {
-                        "trial": 1,
-                        "seed": res.get("seed"),
-                        "success": res.get("success"),
-                        "steps_taken": res.get("steps_taken"),
-                        "scores": {
-                            "task_success_100": res.get("task_success_100"),
-                            "compliance_success_100": res.get("compliance_success_100"),
-                            "instruction_fidelity_100": res.get("instruction_fidelity_100"),
-                            "tool_discipline_100": res.get("tool_discipline_100"),
-                            "robustness_100": res.get("robustness_100"),
-                            "efficiency_100": res.get("efficiency_100"),
-                            "overall_score_100": res.get("overall_score_100"),
-                        },
-                        "paths": {
-                            "details": os.path.join("trial_01", "details.json"),
-                            "transcript": os.path.join("trial_01", "transcript.json"),
-                        },
-                    }
-                ],
-            }
-            with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
-                json.dump(details, f, indent=2, ensure_ascii=False)
-            print(f"\nRESULT: Success={res['success']} Steps={res['steps_taken']} Time={res.get('time_sec',0):.2f}s")
-            continue
+                    "benchmark_track": benchmark_track,
+                    "weights": {
+                        "task_success": weights[0],
+                        "protocol": weights[1],
+                        "robustness": weights[2],
+                        "efficiency": weights[3],
+                    },
+                    "aggregate": res,
+                    "trials": [
+                        {
+                            "trial": 1,
+                            "seed": res.get("seed"),
+                            "success": res.get("success"),
+                            "steps_taken": res.get("steps_taken"),
+                            "scores": {
+                                "task_success_100": res.get("task_success_100"),
+                                "compliance_success_100": res.get("compliance_success_100"),
+                                "instruction_fidelity_100": res.get("instruction_fidelity_100"),
+                                "tool_discipline_100": res.get("tool_discipline_100"),
+                                "robustness_100": res.get("robustness_100"),
+                                "efficiency_100": res.get("efficiency_100"),
+                                "overall_score_100": res.get("overall_score_100"),
+                            },
+                            "paths": {
+                                "details": os.path.join("trial_01", "details.json"),
+                                "transcript": os.path.join("trial_01", "transcript.json"),
+                            },
+                        }
+                    ],
+                }
+                with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
+                    json.dump(details, f, indent=2, ensure_ascii=False)
+                print(
+                    f"\nRESULT: Success={res['success']} Steps={res['steps_taken']} "
+                    f"Time={res.get('time_sec',0):.2f}s Overall={res.get('overall_score_100')}"
+                )
+                continue
 
         task_scores = [t["task_success_100"] for t in trial_results]
         compliance_scores = [t["compliance_success_100"] for t in trial_results]
@@ -2765,8 +3407,9 @@ def run_bench(args):
         time_vals = [t.get("time_sec", 0) or 0 for t in trial_results]
         steps_vals = [t.get("steps_taken", 0) or 0 for t in trial_results]
 
-        agg = {
+            agg = {
             "model": m,
+            "benchmark_track": benchmark_track,
             "overall_score_100": round(sum(overall_scores) / len(overall_scores), 2),
             "task_success_100": round(sum(task_scores) / len(task_scores), 2),
             "compliance_success_100": round(sum(compliance_scores) / len(compliance_scores), 2),
@@ -2838,66 +3481,75 @@ def run_bench(args):
             "p90_steps": round(_quantile(steps_vals, 0.9), 2),
             "failure_reason": "",
             "last_tool_output": "",
-        }
-        results.append(agg)
+            }
+            results.append(agg)
 
-        details = {
-            "model": m,
-            "weights": {
-                "protocol": weights[0],
-                "navigation": weights[1],
-                "robustness": weights[2],
-            },
-            "aggregate": agg,
-            "trials": [],
-        }
-        for i, t in enumerate(trial_results, start=1):
-            trial_dir = os.path.join(out_dir, f"trial_{i:02d}")
-            os.makedirs(trial_dir, exist_ok=True)
-            with open(os.path.join(trial_dir, "details.json"), "w", encoding="utf-8") as f:
-                json.dump({
-                    "model": m,
-                    "time_sec": t.get("time_sec"),
-                    "usage": {"total_tokens": t.get("total_tokens", 0)},
-                    "result": t,
-                }, f, indent=2, ensure_ascii=False)
-            with open(os.path.join(trial_dir, "transcript.json"), "w", encoding="utf-8") as f:
-                json.dump(t.get("transcript", []), f, indent=2, ensure_ascii=False)
-            details["trials"].append({
-                "trial": i,
-                "seed": t.get("seed"),
-                "success": t.get("success"),
-                "steps_taken": t.get("steps_taken"),
-                "scores": {
-                    "task_success_100": t.get("task_success_100"),
-                    "compliance_success_100": t.get("compliance_success_100"),
-                    "instruction_fidelity_100": t.get("instruction_fidelity_100"),
-                    "tool_discipline_100": t.get("tool_discipline_100"),
-                    "robustness_100": t.get("robustness_100"),
-                    "efficiency_100": t.get("efficiency_100"),
-                    "overall_score_100": t.get("overall_score_100"),
+            details = {
+                "model": m,
+                "benchmark_track": benchmark_track,
+                "weights": {
+                    "task_success": weights[0],
+                    "protocol": weights[1],
+                    "robustness": weights[2],
+                    "efficiency": weights[3],
                 },
-                "paths": {
-                    "details": os.path.join(f"trial_{i:02d}", "details.json"),
-                    "transcript": os.path.join(f"trial_{i:02d}", "transcript.json"),
-                }
-            })
+                "aggregate": agg,
+                "trials": [],
+            }
+            for i, t in enumerate(trial_results, start=1):
+                trial_dir = os.path.join(out_dir, f"trial_{i:02d}")
+                os.makedirs(trial_dir, exist_ok=True)
+                with open(os.path.join(trial_dir, "details.json"), "w", encoding="utf-8") as f:
+                    json.dump({
+                        "model": m,
+                        "time_sec": t.get("time_sec"),
+                        "usage": {"total_tokens": t.get("total_tokens", 0)},
+                        "result": t,
+                    }, f, indent=2, ensure_ascii=False)
+                with open(os.path.join(trial_dir, "transcript.json"), "w", encoding="utf-8") as f:
+                    json.dump(t.get("transcript", []), f, indent=2, ensure_ascii=False)
+                details["trials"].append({
+                    "trial": i,
+                    "seed": t.get("seed"),
+                    "success": t.get("success"),
+                    "steps_taken": t.get("steps_taken"),
+                    "scores": {
+                        "task_success_100": t.get("task_success_100"),
+                        "compliance_success_100": t.get("compliance_success_100"),
+                        "instruction_fidelity_100": t.get("instruction_fidelity_100"),
+                        "tool_discipline_100": t.get("tool_discipline_100"),
+                        "robustness_100": t.get("robustness_100"),
+                        "efficiency_100": t.get("efficiency_100"),
+                        "overall_score_100": t.get("overall_score_100"),
+                    },
+                    "paths": {
+                        "details": os.path.join(f"trial_{i:02d}", "details.json"),
+                        "transcript": os.path.join(f"trial_{i:02d}", "transcript.json"),
+                    }
+                })
 
-        with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
-            json.dump(details, f, indent=2, ensure_ascii=False)
-        results_file = os.path.join(out_dir, "results_longchain.csv")
-        file_exists = os.path.exists(results_file)
-        mode = "a" if args.append and file_exists else "w"
-        with open(results_file, mode, newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-            if mode == "w":
-                w.writeheader()
-            for t in trial_results:
-                w.writerow({k: t.get(k, "") for k in CSV_FIELDS})
-        table_file = os.path.join(out_dir, "results_longchain.table.txt")
-        with open(table_file, "w", encoding="utf-8") as f:
-            f.write(render_table(trial_results, CSV_FIELDS))
-        print(f"\nRESULT: Success={agg['success']} Avg Steps={agg['steps_taken']} Avg Time={agg.get('time_sec',0):.2f}s")
+            with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
+                json.dump(details, f, indent=2, ensure_ascii=False)
+            results_file = os.path.join(out_dir, "results_longchain.csv")
+            file_exists = os.path.exists(results_file)
+            mode = "a" if run_args.append and file_exists else "w"
+            with open(results_file, mode, newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                if mode == "w":
+                    w.writeheader()
+                for t in trial_results:
+                    w.writerow({k: t.get(k, "") for k in CSV_FIELDS})
+            table_file = os.path.join(out_dir, "results_longchain.table.txt")
+            with open(table_file, "w", encoding="utf-8") as f:
+                f.write(render_table(trial_results, CSV_FIELDS))
+            print(
+                f"\nRESULT: Success={agg['success']} Avg Steps={agg['steps_taken']} "
+                f"Avg Time={agg.get('time_sec',0):.2f}s "
+                f"p50/p90 Steps={agg.get('p50_steps')}/{agg.get('p90_steps')} "
+                f"p50/p90 Time={agg.get('p50_time_sec')}/{agg.get('p90_time_sec')} "
+                f"Overall={agg.get('overall_score_100')} "
+                f"OverallStd={agg.get('robustness_stddev_overall')}"
+            )
         
     # Save
     os.makedirs(args.out_dir, exist_ok=True)
@@ -2912,13 +3564,18 @@ if __name__ == "__main__":
     parser.add_argument("--chain-length", type=int, default=8, help="Number of hops in the file chain")
     parser.add_argument("--decoy-count", type=int, default=6, help="Number of decoy files")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible runs")
-    parser.add_argument("--trials", type=int, default=1, help="Number of trials with different seeds")
+    parser.add_argument("--trials", type=int, default=20, help="Number of trials with different seeds")
     parser.add_argument("--mode", choices=["compliance", "explore", "robust", "stream"], default="compliance", help="Preset configs for different benchmark modes")
-    parser.add_argument("--w-core", type=float, default=0.34, help="Weight for protocol reliability")
-    parser.add_argument("--w-tool", type=float, default=0.33, help="Weight for navigation quality")
-    parser.add_argument("--w-eff", type=float, default=0.33, help="Weight for robustness")
+    parser.add_argument("--benchmark-track", choices=["rail", "auto", "both"], default="both", help="Run rail-guided (strict) and/or autonomous (non-strict) benchmarks")
+    parser.add_argument("--w-task", dest="w_task", type=float, default=0.25, help="Weight for task success")
+    parser.add_argument("--w-tool", dest="w_task", type=float, help="Alias for --w-task")
+    parser.add_argument("--w-protocol", dest="w_protocol", type=float, default=0.25, help="Weight for protocol reliability")
+    parser.add_argument("--w-core", dest="w_protocol", type=float, help="Alias for --w-protocol")
+    parser.add_argument("--w-robust", dest="w_robust", type=float, default=0.25, help="Weight for robustness")
+    parser.add_argument("--w-eff", dest="w_eff", type=float, default=0.25, help="Weight for efficiency")
     parser.add_argument("--ambiguity-rate", type=float, default=0.0, help="Chance to include a decoy path in clues")
     parser.add_argument("--noise-level", type=float, default=0.0, help="Chance to add noise around tool outputs")
+    parser.add_argument("--noise-mode", choices=["debug", "realistic", "both"], default="debug", help="Noise style for tool outputs")
     parser.add_argument("--tool-failure-rate", type=float, default=0.0, help="Chance a tool call returns a transient error")
     parser.add_argument("--tool-min-latency-ms", type=int, default=0, help="Minimum tool latency in ms")
     parser.add_argument("--tool-max-latency-ms", type=int, default=0, help="Maximum tool latency in ms")
@@ -2956,6 +3613,7 @@ if __name__ == "__main__":
     parser.add_argument("--out-dir", default="advanced tool use bench", help="Output directory for results")
     parser.add_argument("--append", action="store_true", help="Append to existing results file if it exists")
     parser.add_argument("--self-check", action="store_true", help="Run a small VFS chunking sanity check and exit")
+    parser.add_argument("--baselines", action=argparse.BooleanOptionalAction, default=True, help="Include baseline agents in the benchmark")
     
     args = parser.parse_args()
     if args.self_check:
