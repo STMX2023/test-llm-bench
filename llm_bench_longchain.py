@@ -21,7 +21,7 @@ You have access to the following tools:
 6. tree(directory, depth): Returns JSON {"ok": true, "directory": "...", "depth": N, "entries": ["dir/", "file.txt"]}.
 7. read_json(path): Returns JSON {"ok": true, "path": "...", "data": {...}}.
 8. write_json(path, obj): Returns JSON {"ok": true, "path": "...", "message": "..."}.
-9. write_file(path, content): Returns JSON {"ok": true, "path": "...", "message": "..."}.
+9. write_file(path, content): Returns JSON {"ok": true, "path": "...", "message": "...", "bytes": int (optional)}.
 10. api_lookup(query): Returns JSON {"ok": true, "query": "...", "data": "..."} with rate limits.
 11. search_text(query, directory, max_results): Returns JSON {"ok": true, "query": "...", "directory": "...", "max_results": N, "matches": [{"path": "...", "snippet": "..."}]}.
 12. capabilities(): Returns JSON {"ok": true, "tools": {...}}.
@@ -93,6 +93,7 @@ CSV_FIELDS = [
     "tool_valid_rate",
     "args_valid_rate",
     "schema_valid_rate",
+    "output_schema_valid_rate",
     "path_correct_rate",
     "artifacts_access_before_unlock",
     "wrong_trace_reads",
@@ -675,7 +676,7 @@ class VirtualFileSystem:
         if p == self.solution_path:
             self.solution_written = True
             self.solution_content = content
-        return _ok_payload(status="ok", path=p, bytes=len(content))
+        return _ok_payload(path=p, message="Write complete.", bytes=len(content))
 
     def api_lookup(self, query, rate_limit, window_sec, now_ts):
         # sliding window rate limit
@@ -943,6 +944,65 @@ TOOL_SCHEMAS = {
     "submit_answer": {"args": {"answer": "string"}},
 }
 
+TOOL_OUTPUT_REQUIRED = {
+    "read_file": {
+        "ok": bool,
+        "path": str,
+        "truncated": bool,
+        "done": bool,
+        "total_size": int,
+    },
+    "read_file_chunk": {
+        "ok": bool,
+        "path": str,
+        "chunk": str,
+        "truncated": bool,
+        "done": bool,
+        "total_size": int,
+    },
+    "list_files": {"ok": bool, "directory": str, "entries": list},
+    "stat": {"ok": bool, "path": str, "exists": bool},
+    "glob": {"ok": bool, "directory": str, "pattern": str, "matches": list},
+    "tree": {"ok": bool, "directory": str, "depth": int, "entries": list},
+    "read_json": {"ok": bool, "path": str, "data": dict},
+    "write_json": {"ok": bool, "path": str, "message": str},
+    "write_file": {"ok": bool, "path": str, "message": str},
+    "api_lookup": {"ok": bool, "query": str, "data": str},
+    "search_text": {"ok": bool, "query": str, "directory": str, "max_results": int, "matches": list},
+    "capabilities": {"ok": bool, "tools": dict},
+    "remember": {"ok": bool, "key": str},
+    "recall": {"ok": bool, "key": str, "found": bool},
+    "checkpoint": {"ok": bool, "name": str},
+    "rollback": {"ok": bool, "name": str, "rolled_back": bool},
+    "submit_answer": {"ok": bool},
+}
+
+def _output_schema_valid(tool_name: str, result: Any) -> bool:
+    if not isinstance(result, str) or not result:
+        return False
+    try:
+        obj = json.loads(result)
+    except Exception:
+        return False
+    if not isinstance(obj, dict) or "ok" not in obj:
+        return False
+    if obj.get("ok") is False:
+        return True
+    req = TOOL_OUTPUT_REQUIRED.get(tool_name)
+    if not req:
+        return True
+    for key, typ in req.items():
+        if key not in obj:
+            return False
+        if not isinstance(obj[key], typ):
+            return False
+    if tool_name == "read_file":
+        has_content = "content" in obj and isinstance(obj.get("content"), str)
+        has_chunk = "chunk" in obj and isinstance(obj.get("chunk"), str)
+        if not (has_content or has_chunk):
+            return False
+    return True
+
 def _args_valid(tool_name: str, tool_args: Dict[str, Any]) -> bool:
     if tool_name == "list_files":
         return True
@@ -1088,6 +1148,16 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
     explore_over_budget = False
     world_changed = False
 
+    def _solution_is_valid() -> bool:
+        if not vfs.solution_written:
+            return False
+        if (vfs.solution_content or "").strip() != vfs.secret_code:
+            return False
+        if config.require_checksum:
+            checksum = hashlib.sha256(vfs.solution_content.encode("utf-8")).hexdigest()
+            return checksum == vfs.secret_checksum
+        return True
+
     def _finalize(res: str) -> Tuple[str, Optional[List[str]]]:
         return res, None
 
@@ -1215,9 +1285,14 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             "world_changed": False,
         }
 
-    if tool_name == "submit_answer" and config.production_guards and config.no_guess and not (secret_found or vfs.solution_written):
+    if tool_name == "submit_answer" and config.production_guards and config.no_guess and not (secret_found or _solution_is_valid()):
         blocked_submit = True
-        result = _error_payload("ENOGUESS", f"Cannot submit before finding secret or writing {vfs.solution_path}.", False, 0)
+        result = _error_payload(
+            "ENOGUESS",
+            f"Cannot submit before finding secret or writing a valid {vfs.solution_path}.",
+            False,
+            0
+        )
         result, tool_chunks = _finalize(result)
         return {
             "result": result,
@@ -1246,6 +1321,60 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             "world_changed": False,
         }
 
+    # Enforce strict-follow as a preflight block on trace reads.
+    if (
+        config.production_guards
+        and getattr(config, "strict_follow", False)
+        and tool_name in ("read_file", "read_file_chunk")
+    ):
+        req_path = (tool_args.get("path") or "").strip("./")
+        expected_tid = _expected_tid_from_path(expected_next)
+        fork_active = (
+            vfs.fork_present
+            and vfs.fork_dir
+            and expected_index == vfs.fork_index
+            and req_path
+            and req_path.startswith(vfs.fork_dir + "/")
+        )
+        if req_path and _is_trace_path(req_path) and req_path not in BOOTSTRAP_OK and expected_next:
+            if (not fork_active) and req_path != expected_next and wrong_read_streak >= int(getattr(config, "strict_grace", 1)):
+                enforced_path = expected_next
+                wrong_read_streak += 1
+                wrong_trace_reads += 1
+                result = _error_payload(
+                    "EEXPECTED",
+                    f"Strict-follow: expected next trace is '{expected_next}' (TRACE_ID={expected_tid}).",
+                    False,
+                    0
+                )
+                result, tool_chunks = _finalize(result)
+                return {
+                    "result": result,
+                    "finished": False,
+                    "tool_ok": True,
+                    "args_ok": args_ok,
+                    "tool_failed": False,
+                    "blocked_submit": False,
+                    "honeypot_hit": False,
+                    "enforced_path": enforced_path,
+                    "retries": 0,
+                    "latency_ms": 0,
+                    "tool_timed_out": False,
+                    "permission_denied": False,
+                    "expected_index": expected_index,
+                    "wrong_read_streak": wrong_read_streak,
+                    "wrong_trace_reads": wrong_trace_reads,
+                    "explore_per_hop": explore_per_hop,
+                    "explore_total": explore_total,
+                    "explore_over_budget_events": explore_over_budget_events,
+                    "explore_over_budget": False,
+                    "secret_found": secret_found,
+                    "secret_code_seen": secret_code_seen,
+                    "advanced": False,
+                    "tool_chunks": tool_chunks,
+                    "world_changed": False,
+                }
+
     def action():
         if tool_name == "read_file":
             return vfs.read_file(
@@ -1266,10 +1395,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             directory = tool_args.get("directory", ".")
             cursor = tool_args.get("cursor")
             limit = tool_args.get("limit", 50)
-            listing = vfs.list_files(directory, cursor=cursor, limit=limit)
-            if isinstance(listing, str):
-                return listing
-            return _ok_payload(directory=directory, entries=listing)
+            return vfs.list_files(directory, cursor=cursor, limit=limit)
         if tool_name == "stat":
             return vfs.stat(tool_args.get("path", ""))
         if tool_name == "glob":
@@ -1545,7 +1671,8 @@ def compute_scores(res: Dict[str, Any], weights: Tuple[float, float, float]) -> 
     j = float(res.get("json_valid_rate", 0.0))
     t = float(res.get("tool_valid_rate", 0.0))
     a = float(res.get("args_valid_rate", 0.0))
-    protocol = 100.0 * (j + t + a) / 3.0
+    o = float(res.get("output_schema_valid_rate", 0.0))
+    protocol = 100.0 * (j + t + a + o) / 4.0
 
     nav = 100.0 * chain_completion
     nav -= min(25.0, float(res.get("redundant_reads", 0) or 0) * 2.0)
@@ -1661,6 +1788,7 @@ def apply_mode_defaults(args: argparse.Namespace) -> None:
     if args.mode == "compliance":
         args.production_guards = True
         args.follow_policy = "hard"
+        args.strict_follow = True
         args.retry_policy = "harness"
         args.reject_multi_tool = True
         args.allow_parallel_tools = False
@@ -1672,6 +1800,7 @@ def apply_mode_defaults(args: argparse.Namespace) -> None:
     elif args.mode == "explore":
         args.production_guards = True
         args.follow_policy = "soft"
+        args.strict_follow = False
         args.retry_policy = "harness"
         args.reject_multi_tool = True
         args.allow_parallel_tools = False
@@ -1680,6 +1809,7 @@ def apply_mode_defaults(args: argparse.Namespace) -> None:
     elif args.mode == "robust":
         args.production_guards = True
         args.follow_policy = "soft"
+        args.strict_follow = False
         args.retry_policy = "none"
         args.reject_multi_tool = True
         args.allow_parallel_tools = False
@@ -1692,6 +1822,7 @@ def apply_mode_defaults(args: argparse.Namespace) -> None:
     elif args.mode == "stream":
         args.production_guards = True
         args.follow_policy = "soft"
+        args.strict_follow = False
         args.retry_policy = "harness"
         args.reject_multi_tool = True
         args.allow_parallel_tools = False
@@ -1734,6 +1865,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
     tool_valid = 0
     args_valid = 0
     schema_valid = 0
+    output_schema_valid = 0
     path_correct = 0
     list_files_calls = 0
     read_file_calls = 0
@@ -1995,6 +2127,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         "tool_valid_rate": tool_valid / steps if steps else 0,
                         "args_valid_rate": args_valid / steps if steps else 0,
                         "schema_valid_rate": schema_valid / steps if steps else 0,
+                        "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
                         "path_correct_rate": path_correct / max(1, config.chain_length),
                         "artifacts_access_before_unlock": artifacts_access_before_unlock,
                         "wrong_trace_reads": wrong_trace_reads,
@@ -2164,6 +2297,8 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                             hint_since_error = False
                     step_tool_chunks.append(exec_res["tool_chunks"])
                     batch_results.append({"tool": call_tool, "result": exec_res["result"]})
+                    if _output_schema_valid(call_tool, exec_res["result"]):
+                        output_schema_valid += 1
                     if exec_res["finished"]:
                         finished = True
                 if step_tool_ok:
@@ -2263,6 +2398,8 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     args_valid += 1
                 if _schema_valid(tool_name, tool_args):
                     schema_valid += 1
+                if _output_schema_valid(tool_name, exec_res["result"]):
+                    output_schema_valid += 1
                 if exec_res["tool_failed"]:
                     tool_failed_events += 1
                     pending_error_recovery += 1
@@ -2341,6 +2478,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_valid_rate": tool_valid / steps if steps else 0,
                     "args_valid_rate": args_valid / steps if steps else 0,
                     "schema_valid_rate": schema_valid / steps if steps else 0,
+                    "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
                     "path_correct_rate": path_correct / max(1, config.chain_length),
                     "artifacts_access_before_unlock": artifacts_access_before_unlock,
                     "wrong_trace_reads": wrong_trace_reads,
@@ -2400,6 +2538,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 "tool_valid_rate": tool_valid / steps if steps else 0,
                 "args_valid_rate": args_valid / steps if steps else 0,
                 "schema_valid_rate": schema_valid / steps if steps else 0,
+                "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
                 "path_correct_rate": path_correct / max(1, config.chain_length),
                 "artifacts_access_before_unlock": artifacts_access_before_unlock,
                 "wrong_trace_reads": wrong_trace_reads,
@@ -2456,6 +2595,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
         "tool_valid_rate": tool_valid / steps if steps else 0,
         "args_valid_rate": args_valid / steps if steps else 0,
         "schema_valid_rate": schema_valid / steps if steps else 0,
+        "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
         "path_correct_rate": path_correct / max(1, config.chain_length),
         "artifacts_access_before_unlock": artifacts_access_before_unlock,
         "wrong_trace_reads": wrong_trace_reads,
@@ -2632,6 +2772,7 @@ def run_bench(args):
             "tool_valid_rate": round(sum(t.get("tool_valid_rate", 0) for t in trial_results) / len(trial_results), 3),
             "args_valid_rate": round(sum(t.get("args_valid_rate", 0) for t in trial_results) / len(trial_results), 3),
             "schema_valid_rate": round(sum(t.get("schema_valid_rate", 0) for t in trial_results) / len(trial_results), 3),
+            "output_schema_valid_rate": round(sum(t.get("output_schema_valid_rate", 0) for t in trial_results) / len(trial_results), 3),
             "path_correct_rate": round(sum(t.get("path_correct_rate", 0) for t in trial_results) / len(trial_results), 3),
             "artifacts_access_before_unlock": round(sum(t.get("artifacts_access_before_unlock", 0) for t in trial_results) / len(trial_results), 2),
             "wrong_trace_reads": round(sum(t.get("wrong_trace_reads", 0) for t in trial_results) / len(trial_results), 2),
