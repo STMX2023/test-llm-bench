@@ -765,68 +765,99 @@ def _strip_reasoning_headers(text: str) -> str:
 
 def _find_json_candidates(text: str) -> List[str]:
     candidates = []
-    stack = 0
+    stack = []
     start = None
+    pairs = {"{": "}", "[": "]"}
     for i, ch in enumerate(text):
-        if ch == "{":
-            if stack == 0:
+        if ch in pairs:
+            if not stack:
                 start = i
-            stack += 1
-        elif ch == "}":
-            if stack > 0:
-                stack -= 1
-                if stack == 0 and start is not None:
+            stack.append(ch)
+        elif ch in ("]", "}"):
+            if stack and pairs.get(stack[-1]) == ch:
+                stack.pop()
+                if not stack and start is not None:
                     candidates.append(text[start:i+1])
                     start = None
+            else:
+                stack = []
+                start = None
     return candidates
 
 def _extract_json_fences(text: str) -> List[str]:
-    return re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    return re.findall(r"```(?:json)?\s*([\[{].*?[\]}])\s*```", text, re.DOTALL | re.IGNORECASE)
 
-def safe_json_parse(text: str) -> Optional[Dict[str, Any]]:
+def safe_json_parse(text: str) -> Optional[Any]:
     if not text:
         return None
     text0 = _strip_reasoning_headers(text)
     fences = _extract_json_fences(text0)
-    if not fences:
-        return None
+    candidates = fences + _find_json_candidates(text0)
+
+    def _valid_tool_call(obj: Any) -> bool:
+        return isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and isinstance(obj.get("args"), dict)
+
+    def _valid_tool_list(obj: Any) -> bool:
+        return isinstance(obj, list) and obj and all(_valid_tool_call(item) for item in obj)
+
+    last_valid = None
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except Exception:
+            continue
+        if _valid_tool_call(obj) or _valid_tool_list(obj):
+            last_valid = obj
+
+    if last_valid is not None:
+        return last_valid
+
     try:
-        obj = json.loads(fences[-1])
+        obj = json.loads(text0.strip())
     except Exception:
         return None
-    if not isinstance(obj, dict):
-        return None
-    tool = obj.get("tool")
-    args = obj.get("args")
-    if tool not in ALLOWED_TOOLS:
-        return None
-    if not isinstance(args, dict):
-        return None
-    return obj
+    if _valid_tool_call(obj) or _valid_tool_list(obj):
+        return obj
+    return None
 
 def count_json_objects(text: str) -> int:
     text0 = _strip_reasoning_headers(text)
     fences = _extract_json_fences(text0)
+    candidates = fences if fences else _find_json_candidates(text0)
     count = 0
-    for block in fences:
+    for block in candidates:
         try:
             obj = json.loads(block)
         except Exception:
             continue
         if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and isinstance(obj.get("args"), dict):
             count += 1
+        elif isinstance(obj, list):
+            valid = [
+                item for item in obj
+                if isinstance(item, dict)
+                and item.get("tool") in ALLOWED_TOOLS
+                and isinstance(item.get("args"), dict)
+            ]
+            count += len(valid)
     return count
 
 def parse_multi_tool_calls(text: str) -> List[Dict[str, Any]]:
     text0 = _strip_reasoning_headers(text)
     calls: List[Dict[str, Any]] = []
-    for block in _extract_json_fences(text0):
+    fences = _extract_json_fences(text0)
+    candidates = fences if fences else _find_json_candidates(text0)
+    for block in candidates:
         try:
             obj = json.loads(block)
         except Exception:
             continue
         if isinstance(obj, dict) and obj.get("tool") in ALLOWED_TOOLS and isinstance(obj.get("args"), dict):
             calls.append(obj)
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, dict) and item.get("tool") in ALLOWED_TOOLS and isinstance(item.get("args"), dict):
+                    calls.append(item)
     return calls
 
 def sanitize_filename(name: str) -> str:
@@ -1204,7 +1235,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
 
     BOOTSTRAP_OK = {"start_instructions.txt", "task.md", "readme.md", "meta.json"}
 
-    def _record_wrong_trace(expected_tid: Optional[str]) -> None:
+    def _record_wrong_trace() -> None:
         nonlocal wrong_read_streak, wrong_trace_reads, explore_per_hop, explore_total, explore_over_budget_events
         nonlocal enforced_path, result, explore_over_budget
         wrong_read_streak += 1
@@ -1218,10 +1249,10 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
                 explore_over_budget = True
                 explore_over_budget_events += 1
                 if config.production_guards and config.follow_policy == "hard":
-                    enforced_path = expected_next
+                    enforced_path = None
                     result = _error_payload(
                         "EEXPECTED",
-                        f"Expected TRACE_ID={expected_tid}. Follow the trace chain.",
+                        "Wrong trace; continue from your last valid clue.",
                         False,
                         0
                     )
@@ -1236,37 +1267,6 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             "args_ok": False,
             "tool_failed": False,
             "blocked_submit": False,
-            "honeypot_hit": False,
-            "enforced_path": None,
-            "retries": 0,
-            "latency_ms": 0,
-            "tool_timed_out": False,
-            "permission_denied": False,
-            "expected_index": expected_index,
-            "wrong_read_streak": wrong_read_streak,
-            "wrong_trace_reads": wrong_trace_reads,
-            "explore_per_hop": explore_per_hop,
-            "explore_total": explore_total,
-            "explore_over_budget_events": explore_over_budget_events,
-            "explore_over_budget": explore_over_budget,
-            "secret_found": secret_found,
-            "secret_code_seen": secret_code_seen,
-            "advanced": False,
-            "tool_chunks": tool_chunks,
-            "world_changed": False,
-        }
-
-    if tool_name == "submit_answer" and config.production_guards and expected_index < config.chain_length - 1:
-        blocked_submit = True
-        result = _error_payload("EEXPECTED", "Trace chain incomplete.", False, 0)
-        result, tool_chunks = _finalize(result)
-        return {
-            "result": result,
-            "finished": False,
-            "tool_ok": tool_ok,
-            "args_ok": args_ok,
-            "tool_failed": False,
-            "blocked_submit": blocked_submit,
             "honeypot_hit": False,
             "enforced_path": None,
             "retries": 0,
@@ -1331,14 +1331,6 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
     ):
         req_path = (tool_args.get("path") or "").strip("./")
         current_path = vfs.path_sequence[expected_index] if 0 <= expected_index < len(vfs.path_sequence) else None
-        expected_tid = _expected_tid_from_path(expected_next)
-        fork_active = (
-            vfs.fork_present
-            and vfs.fork_dir
-            and expected_index == vfs.fork_index
-            and req_path
-            and req_path.startswith(vfs.fork_dir + "/")
-        )
         if (
             tool_name == "read_file_chunk"
             and current_path
@@ -1346,13 +1338,13 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
         ):
             pass
         elif req_path and _is_trace_path(req_path) and req_path not in BOOTSTRAP_OK and expected_next:
-            if (not fork_active) and req_path != expected_next and wrong_read_streak >= int(getattr(config, "strict_grace", 1)):
-                enforced_path = expected_next
+            if req_path != expected_next and wrong_read_streak >= int(getattr(config, "strict_grace", 1)):
+                enforced_path = None
                 wrong_read_streak += 1
                 wrong_trace_reads += 1
                 result = _error_payload(
                     "EEXPECTED",
-                    f"Strict-follow: expected next trace is '{expected_next}' (TRACE_ID={expected_tid}).",
+                    "Wrong trace; continue from your last valid clue.",
                     False,
                     0
                 )
@@ -1501,73 +1493,67 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
     if tool_name == "read_file" and isinstance(result, str) and not _is_error_payload(result):
         text_for_tid = _read_file_text_for_tid(result)
         req_path = _norm(tool_args.get("path", ""))
-        current_path = vfs.path_sequence[expected_index] if 0 <= expected_index < len(vfs.path_sequence) else None
-        expected_path = expected_next
         bootstrap_ok = req_path in BOOTSTRAP_OK
         is_trace_read = _is_trace_path(req_path)
-        fork_active = (
-            vfs.fork_present
-            and vfs.fork_dir
-            and expected_index == vfs.fork_index
-            and req_path.startswith(vfs.fork_dir + "/")
-        )
         if vfs.fork_present and req_path:
             if req_path == vfs.fork_dead_end_path:
                 vfs.fork_wrong_branch_reads += 1
                 vfs.fork_dead_end_hit = True
 
-        expected_tid = _expected_tid_from_path(expected_next)
         actual_tid = _extract_trace_id(text_for_tid)
 
-        if not bootstrap_ok and is_trace_read and expected_tid:
-            if actual_tid == expected_tid and allow_advance:
-                expected_index += 1
-                wrong_read_streak = 0
-                explore_per_hop = 0
-                advanced = True
-            else:
-                _record_wrong_trace(expected_tid)
+        if config.benchmark_track == "assisted":
+            expected_tid = _expected_tid_from_path(expected_next)
+            if not bootstrap_ok and is_trace_read and expected_tid:
+                if actual_tid == expected_tid and allow_advance:
+                    expected_index += 1
+                    wrong_read_streak = 0
+                    explore_per_hop = 0
+                    advanced = True
+                else:
+                    _record_wrong_trace()
+        elif not bootstrap_ok and is_trace_read and actual_tid:
+            if "Archived trace. No next pointer." in text_for_tid:
+                _record_wrong_trace()
         if "secret code" in text_for_tid.lower():
             secret_found = True
             m = re.search(r"secret code is:\\s*([A-Za-z0-9_\\-]+)", text_for_tid, re.IGNORECASE)
             if m:
                 secret_code_seen = m.group(1)
-        if advanced and vfs.fork_present and vfs.fork_dead_end_hit and expected_index > (vfs.fork_index or -1):
-            vfs.fork_recovered = True
-        if expected_index >= len(vfs.path_sequence) - 1:
+        if config.benchmark_track == "assisted":
+            if expected_index >= len(vfs.path_sequence) - 1:
+                vfs.artifacts_unlocked = True
+        elif "Trace chain complete." in text_for_tid:
             vfs.artifacts_unlocked = True
     elif tool_name == "read_file_chunk" and isinstance(result, str) and not _is_error_payload(result):
         chunk_text = _read_chunk_text(result)
         req_path = _norm(tool_args.get("path", ""))
-        current_path = vfs.path_sequence[expected_index] if 0 <= expected_index < len(vfs.path_sequence) else None
-        expected_path = expected_next
         bootstrap_ok = req_path in BOOTSTRAP_OK
         is_trace_read = _is_trace_path(req_path)
-        fork_active = (
-            vfs.fork_present
-            and vfs.fork_dir
-            and expected_index == vfs.fork_index
-            and req_path.startswith(vfs.fork_dir + "/")
-        )
         if vfs.fork_present and req_path:
             if req_path == vfs.fork_dead_end_path:
                 vfs.fork_wrong_branch_reads += 1
                 vfs.fork_dead_end_hit = True
 
-        expected_tid = _expected_tid_from_path(expected_next)
         actual_tid = _extract_trace_id(chunk_text)
 
-        if not bootstrap_ok and is_trace_read and expected_tid:
-            if actual_tid == expected_tid and allow_advance:
-                expected_index += 1
-                wrong_read_streak = 0
-                explore_per_hop = 0
-                advanced = True
-            else:
-                _record_wrong_trace(expected_tid)
-        if advanced and vfs.fork_present and vfs.fork_dead_end_hit and expected_index > (vfs.fork_index or -1):
-            vfs.fork_recovered = True
-        if expected_index >= len(vfs.path_sequence) - 1:
+        if config.benchmark_track == "assisted":
+            expected_tid = _expected_tid_from_path(expected_next)
+            if not bootstrap_ok and is_trace_read and expected_tid:
+                if actual_tid == expected_tid and allow_advance:
+                    expected_index += 1
+                    wrong_read_streak = 0
+                    explore_per_hop = 0
+                    advanced = True
+                else:
+                    _record_wrong_trace()
+        elif not bootstrap_ok and is_trace_read and actual_tid:
+            if "Archived trace. No next pointer." in chunk_text:
+                _record_wrong_trace()
+        if config.benchmark_track == "assisted":
+            if expected_index >= len(vfs.path_sequence) - 1:
+                vfs.artifacts_unlocked = True
+        elif "Trace chain complete." in chunk_text:
             vfs.artifacts_unlocked = True
     if tool_name == "write_file" and tool_args.get("path", "").strip("./") == vfs.solution_path:
         if vfs.solution_content == vfs.secret_code:
@@ -1674,7 +1660,7 @@ def compute_scores(res: Dict[str, Any], weights: Tuple[float, float, float, floa
     compliance_success = 1.0 if res.get("compliance_success") else 0.0
 
     chain_len = max(1, int(res.get("chain_length", 1)))
-    chain_completion = float(res.get("path_correct_rate", 0.0))
+    chain_completion = 1.0 if task_success else 0.0
     chain_completion = max(0.0, min(1.0, chain_completion))
 
     j = float(res.get("json_valid_rate", 0.0))
@@ -1910,6 +1896,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
     dead_end_hint_sent = False
     chain_complete_hint_sent = False
     explore_budget_hint_sent = False
+    parse_failures = 0
 
     transcript = []
 
@@ -2092,6 +2079,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
             expected_next = None
             if expected_index + 1 < len(vfs.path_sequence):
                 expected_next = vfs.path_sequence[expected_index + 1]
+            expected_next_log = expected_next if config.benchmark_track == "assisted" else None
 
             # Parse Tool
             tool_call = safe_json_parse(completion)
@@ -2104,15 +2092,14 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 # We give one hint if it's the first time, else fail?
                 # Actually, let's just feed back "Error: No valid JSON tool call found."
                 print(f"    -> Invalid Output (No JSON)")
-                err_msg = "Error: I could not parse a valid JSON tool call. Please format your response as a JSON object with 'tool' and 'args' keys."
                 parse_failure_code = "E_PARSE"
-                messages.append({"role": "user", "content": err_msg})
+                parse_failures += 1
                 transcript.append({
                     "step": steps,
                     "model_output": completion,
                     "tool_call": None,
-                    "tool_result": err_msg,
-                    "expected_next": expected_next,
+                    "tool_result": None,
+                    "expected_next": expected_next_log,
                     "tool_failed": False,
                     "permission_denied": False,
                     "blocked_submit": False,
@@ -2126,7 +2113,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_elapsed_ms": 0,
                     **_stream_snapshot()
                 })
-                if steps > MAX_STEPS - 5: # If failing repeatedly near the end
+                if parse_failures >= config.max_parse_failures:
                     return {
                         "success": False,
                         "task_success": False,
@@ -2187,15 +2174,14 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
             json_valid += 1
             effective_reject = config.reject_multi_tool and not config.allow_parallel_tools
             if config.production_guards and effective_reject and json_count > 1:
-                err_msg = "Error: Multiple tool calls detected. Please return exactly one tool call."
                 parse_failure_code = "E_MULTITOOL"
-                messages.append({"role": "user", "content": err_msg})
+                parse_failures += 1
                 transcript.append({
                     "step": steps,
                     "model_output": completion,
                     "tool_call": None,
-                    "tool_result": err_msg,
-                    "expected_next": expected_next,
+                    "tool_result": None,
+                    "expected_next": expected_next_log,
                     "tool_failed": False,
                     "permission_denied": False,
                     "blocked_submit": False,
@@ -2209,22 +2195,163 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "parallel_tools": None,
                     **_stream_snapshot()
                 })
+                if parse_failures >= config.max_parse_failures:
+                    return {
+                        "success": False,
+                        "task_success": False,
+                        "compliance_success": _compliance_success(),
+                        "failure_reason": parse_failure_code,
+                        "steps_taken": steps,
+                        "last_tool_output": last_tool_output,
+                        "chain_length": config.chain_length,
+                        "decoy_count": config.decoy_count,
+                        "ambiguity_rate": config.ambiguity_rate,
+                        "noise_level": config.noise_level,
+                        "tool_failure_rate": config.tool_failure_rate,
+                        "permission_deny_rate": config.permission_deny_rate,
+                        "stream_rate": config.stream_rate,
+                        "api_rate_limit": config.api_rate_limit,
+                        "api_rate_window_sec": config.api_rate_window_sec,
+                        "tool_min_latency_ms": config.tool_min_latency_ms,
+                        "tool_max_latency_ms": config.tool_max_latency_ms,
+                        "tool_timeout_ms": config.tool_timeout_ms,
+                        "read_max_bytes": config.read_max_bytes,
+                        "read_truncate_rate": config.read_truncate_rate,
+                        "long_file_rate": config.long_file_rate,
+                        "concurrent_change_rate": config.concurrent_change_rate,
+                        "seed": vfs.seed,
+                        "json_valid_rate": json_valid / steps if steps else 0,
+                        "tool_valid_rate": tool_valid / steps if steps else 0,
+                        "args_valid_rate": args_valid / steps if steps else 0,
+                        "schema_valid_rate": schema_valid / steps if steps else 0,
+                        "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
+                        "path_correct_rate": path_correct / max(1, config.chain_length),
+                        "artifacts_access_before_unlock": artifacts_access_before_unlock,
+                        "wrong_trace_reads": wrong_trace_reads,
+                        "explore_over_budget_events": explore_over_budget_events,
+                        "fork_present": vfs.fork_present,
+                        "fork_wrong_branch_reads": vfs.fork_wrong_branch_reads,
+                        "fork_dead_end_hit": vfs.fork_dead_end_hit,
+                        "fork_recovered": vfs.fork_recovered,
+                        "stream_sessions_started": stream_sessions_started,
+                        "stream_sessions_completed": stream_sessions_completed,
+                        "stream_abandoned_paths": sorted(active_streams),
+                        "unique_files_read": len(all_read_paths),
+                        "redundant_reads": redundant_reads,
+                        "list_files_calls": list_files_calls,
+                        "read_file_calls": read_file_calls,
+                        "read_file_chunk_calls": read_file_chunk_calls,
+                        "write_file_calls": write_file_calls,
+                        "search_text_calls": search_text_calls,
+                        "api_lookup_calls": api_lookup_calls,
+                        "submit_attempts": submit_attempts,
+                        "blocked_submit_attempts": blocked_submit_attempts,
+                        "tool_failed_events": tool_failed_events,
+                        "tool_error_recovery_success": tool_error_recovery_success,
+                        "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
+                        "honeypot_hits": honeypot_hits,
+                        "transcript": transcript
+                    }
                 continue
             if json_count > 1 and config.allow_parallel_tools:
                 tool_calls_batch = parse_multi_tool_calls(completion)
 
-            tool_name = tool_call.get("tool")
-            tool_args = tool_call.get("args")
+            if isinstance(tool_call, list):
+                if not config.allow_parallel_tools:
+                    parse_failure_code = "E_MULTITOOL"
+                    parse_failures += 1
+                    transcript.append({
+                        "step": steps,
+                        "model_output": completion,
+                        "tool_call": None,
+                        "tool_result": None,
+                        "expected_next": expected_next_log,
+                        "tool_failed": False,
+                        "permission_denied": False,
+                        "blocked_submit": False,
+                        "enforced_path": None,
+                        "failure_code": parse_failure_code,
+                        "tool_retries": 0,
+                        "tool_latency_ms": 0,
+                        "tool_timed_out": False,
+                        "tool_chunks": None,
+                        "rejected_multi_tool": True,
+                        "tool_elapsed_ms": 0,
+                        **_stream_snapshot()
+                    })
+                    if parse_failures >= config.max_parse_failures:
+                        return {
+                            "success": False,
+                            "task_success": False,
+                            "compliance_success": _compliance_success(),
+                            "failure_reason": parse_failure_code,
+                            "steps_taken": steps,
+                            "last_tool_output": last_tool_output,
+                            "chain_length": config.chain_length,
+                            "decoy_count": config.decoy_count,
+                            "ambiguity_rate": config.ambiguity_rate,
+                            "noise_level": config.noise_level,
+                            "tool_failure_rate": config.tool_failure_rate,
+                            "permission_deny_rate": config.permission_deny_rate,
+                            "stream_rate": config.stream_rate,
+                            "api_rate_limit": config.api_rate_limit,
+                            "api_rate_window_sec": config.api_rate_window_sec,
+                            "tool_min_latency_ms": config.tool_min_latency_ms,
+                            "tool_max_latency_ms": config.tool_max_latency_ms,
+                            "tool_timeout_ms": config.tool_timeout_ms,
+                            "read_max_bytes": config.read_max_bytes,
+                            "read_truncate_rate": config.read_truncate_rate,
+                            "long_file_rate": config.long_file_rate,
+                            "concurrent_change_rate": config.concurrent_change_rate,
+                            "seed": vfs.seed,
+                            "json_valid_rate": json_valid / steps if steps else 0,
+                            "tool_valid_rate": tool_valid / steps if steps else 0,
+                            "args_valid_rate": args_valid / steps if steps else 0,
+                            "schema_valid_rate": schema_valid / steps if steps else 0,
+                            "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
+                            "path_correct_rate": path_correct / max(1, config.chain_length),
+                            "artifacts_access_before_unlock": artifacts_access_before_unlock,
+                            "wrong_trace_reads": wrong_trace_reads,
+                            "explore_over_budget_events": explore_over_budget_events,
+                            "fork_present": vfs.fork_present,
+                            "fork_wrong_branch_reads": vfs.fork_wrong_branch_reads,
+                            "fork_dead_end_hit": vfs.fork_dead_end_hit,
+                            "fork_recovered": vfs.fork_recovered,
+                            "stream_sessions_started": stream_sessions_started,
+                            "stream_sessions_completed": stream_sessions_completed,
+                            "stream_abandoned_paths": sorted(active_streams),
+                            "unique_files_read": len(all_read_paths),
+                            "redundant_reads": redundant_reads,
+                            "list_files_calls": list_files_calls,
+                            "read_file_calls": read_file_calls,
+                            "read_file_chunk_calls": read_file_chunk_calls,
+                            "write_file_calls": write_file_calls,
+                            "search_text_calls": search_text_calls,
+                            "api_lookup_calls": api_lookup_calls,
+                            "submit_attempts": submit_attempts,
+                            "blocked_submit_attempts": blocked_submit_attempts,
+                            "tool_failed_events": tool_failed_events,
+                            "tool_error_recovery_success": tool_error_recovery_success,
+                            "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
+                            "honeypot_hits": honeypot_hits,
+                            "transcript": transcript
+                        }
+                    continue
+                tool_calls_batch = tool_call
+                tool_name = tool_calls_batch[0].get("tool")
+                tool_args = tool_calls_batch[0].get("args", {})
+            else:
+                tool_name = tool_call.get("tool")
+                tool_args = tool_call.get("args")
             if tool_name not in ALLOWED_TOOLS or not isinstance(tool_args, dict):
-                err_msg = "Error: Tool call must include a valid 'tool' and an 'args' object."
                 parse_failure_code = "E_SCHEMA"
-                messages.append({"role": "user", "content": err_msg})
+                parse_failures += 1
                 transcript.append({
                     "step": steps,
                     "model_output": completion,
                     "tool_call": None,
-                    "tool_result": err_msg,
-                    "expected_next": expected_next,
+                    "tool_result": None,
+                    "expected_next": expected_next_log,
                     "tool_failed": False,
                     "permission_denied": False,
                     "blocked_submit": False,
@@ -2238,6 +2365,63 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_elapsed_ms": 0,
                     **_stream_snapshot()
                 })
+                if parse_failures >= config.max_parse_failures:
+                    return {
+                        "success": False,
+                        "task_success": False,
+                        "compliance_success": _compliance_success(),
+                        "failure_reason": parse_failure_code,
+                        "steps_taken": steps,
+                        "last_tool_output": last_tool_output,
+                        "chain_length": config.chain_length,
+                        "decoy_count": config.decoy_count,
+                        "ambiguity_rate": config.ambiguity_rate,
+                        "noise_level": config.noise_level,
+                        "tool_failure_rate": config.tool_failure_rate,
+                        "permission_deny_rate": config.permission_deny_rate,
+                        "stream_rate": config.stream_rate,
+                        "api_rate_limit": config.api_rate_limit,
+                        "api_rate_window_sec": config.api_rate_window_sec,
+                        "tool_min_latency_ms": config.tool_min_latency_ms,
+                        "tool_max_latency_ms": config.tool_max_latency_ms,
+                        "tool_timeout_ms": config.tool_timeout_ms,
+                        "read_max_bytes": config.read_max_bytes,
+                        "read_truncate_rate": config.read_truncate_rate,
+                        "long_file_rate": config.long_file_rate,
+                        "concurrent_change_rate": config.concurrent_change_rate,
+                        "seed": vfs.seed,
+                        "json_valid_rate": json_valid / steps if steps else 0,
+                        "tool_valid_rate": tool_valid / steps if steps else 0,
+                        "args_valid_rate": args_valid / steps if steps else 0,
+                        "schema_valid_rate": schema_valid / steps if steps else 0,
+                        "output_schema_valid_rate": output_schema_valid / steps if steps else 0,
+                        "path_correct_rate": path_correct / max(1, config.chain_length),
+                        "artifacts_access_before_unlock": artifacts_access_before_unlock,
+                        "wrong_trace_reads": wrong_trace_reads,
+                        "explore_over_budget_events": explore_over_budget_events,
+                        "fork_present": vfs.fork_present,
+                        "fork_wrong_branch_reads": vfs.fork_wrong_branch_reads,
+                        "fork_dead_end_hit": vfs.fork_dead_end_hit,
+                        "fork_recovered": vfs.fork_recovered,
+                        "stream_sessions_started": stream_sessions_started,
+                        "stream_sessions_completed": stream_sessions_completed,
+                        "stream_abandoned_paths": sorted(active_streams),
+                        "unique_files_read": len(all_read_paths),
+                        "redundant_reads": redundant_reads,
+                        "list_files_calls": list_files_calls,
+                        "read_file_calls": read_file_calls,
+                        "read_file_chunk_calls": read_file_chunk_calls,
+                        "write_file_calls": write_file_calls,
+                        "search_text_calls": search_text_calls,
+                        "api_lookup_calls": api_lookup_calls,
+                        "submit_attempts": submit_attempts,
+                        "blocked_submit_attempts": blocked_submit_attempts,
+                        "tool_failed_events": tool_failed_events,
+                        "tool_error_recovery_success": tool_error_recovery_success,
+                        "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
+                        "honeypot_hits": honeypot_hits,
+                        "transcript": transcript
+                    }
                 continue
             print(f"    -> Tool: {tool_name} {tool_args}")
             
@@ -2377,7 +2561,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_call": tool_calls_batch,
                     "tool_result": noisy_batch_payload,
                     "tool_chunks": step_tool_chunks,
-                    "expected_next": expected_next,
+                    "expected_next": expected_next_log,
                     "tool_failed": step_tool_failed,
                     "permission_denied": step_permission_denied,
                     "blocked_submit": step_blocked_submit,
@@ -2488,7 +2672,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_call": tool_call,
                     "tool_result": noisy_result,
                     "tool_chunks": tool_chunks,
-                    "expected_next": expected_next,
+                    "expected_next": expected_next_log,
                     "tool_failed": exec_res["tool_failed"],
                     "permission_denied": exec_res["permission_denied"],
                     "blocked_submit": exec_res["blocked_submit"],
@@ -3280,7 +3464,7 @@ def run_bench(args):
     results = []
     if isinstance(args.benchmark_track, str):
         if args.benchmark_track == "both":
-            args.benchmark_track = ["rail", "auto"]
+            args.benchmark_track = ["realistic", "assisted"]
         else:
             args.benchmark_track = [args.benchmark_track]
     if args.baselines:
@@ -3297,10 +3481,15 @@ def run_bench(args):
         for benchmark_track in args.benchmark_track:
             run_args = deepcopy(args)
             run_args.benchmark_track = benchmark_track
-            if benchmark_track == "rail":
+            if benchmark_track == "assisted":
                 run_args.strict_follow = True
-            elif benchmark_track == "auto":
+                run_args.enable_hints = True
+                run_args.auto_submit_on_secret = True
+            elif benchmark_track == "realistic":
                 run_args.strict_follow = False
+                run_args.enable_hints = False
+                run_args.auto_submit_on_secret = False
+                run_args.follow_policy = "none"
 
             print(f"\nExample Run: {m} [{benchmark_track}]")
             trial_results = []
@@ -3542,18 +3731,45 @@ def run_bench(args):
         table_file = os.path.join(out_dir, "results_longchain.table.txt")
         with open(table_file, "w", encoding="utf-8") as f:
             f.write(render_table(trial_results, CSV_FIELDS))
-        print(
-            f"\nRESULT: Success={agg['success']} Avg Steps={agg['steps_taken']} "
-            f"Avg Time={agg.get('time_sec',0):.2f}s "
-            f"p50/p90 Steps={agg.get('p50_steps')}/{agg.get('p90_steps')} "
-            f"p50/p90 Time={agg.get('p50_time_sec')}/{agg.get('p90_time_sec')} "
-            f"Overall={agg.get('overall_score_100')} "
-            f"OverallStd={agg.get('robustness_stddev_overall')}"
-        )
+            print(
+                f"\nRESULT: Success={agg['success']} Avg Steps={agg['steps_taken']} "
+                f"Avg Time={agg.get('time_sec',0):.2f}s "
+                f"p50/p90 Steps={agg.get('p50_steps')}/{agg.get('p90_steps')} "
+                f"p50/p90 Time={agg.get('p50_time_sec')}/{agg.get('p90_time_sec')} "
+                f"Overall={agg.get('overall_score_100')} "
+                f"OverallStd={agg.get('robustness_stddev_overall')}"
+            )
         
     # Save
     os.makedirs(args.out_dir, exist_ok=True)
     # Per-model CSVs are written alongside model details.
+    if results:
+        rank_fields = [
+            "model",
+            "benchmark_track",
+            "overall_score_100",
+            "task_success_100",
+            "tool_discipline_100",
+            "robustness_100",
+            "efficiency_100",
+            "steps_taken",
+            "time_sec",
+        ]
+        by_track = {}
+        for row in results:
+            track = row.get("benchmark_track") or "unknown"
+            by_track.setdefault(track, []).append(row)
+        for track, rows in by_track.items():
+            rows_sorted = sorted(rows, key=lambda r: (r.get("overall_score_100", 0)), reverse=True)
+            table_file = os.path.join(args.out_dir, f"rankings_{track}.table.txt")
+            with open(table_file, "w", encoding="utf-8") as f:
+                f.write(render_table(rows_sorted, rank_fields))
+            csv_file = os.path.join(args.out_dir, f"rankings_{track}.csv")
+            with open(csv_file, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=rank_fields)
+                w.writeheader()
+                for row in rows_sorted:
+                    w.writerow({k: row.get(k, "") for k in rank_fields})
 
 if __name__ == "__main__":
     # SYNC_OK
@@ -3566,7 +3782,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible runs")
     parser.add_argument("--trials", type=int, default=20, help="Number of trials with different seeds")
     parser.add_argument("--mode", choices=["compliance", "explore", "robust", "stream"], default="compliance", help="Preset configs for different benchmark modes")
-    parser.add_argument("--benchmark-track", choices=["rail", "auto", "both"], default="both", help="Run rail-guided (strict) and/or autonomous (non-strict) benchmarks")
+    parser.add_argument("--benchmark-track", choices=["assisted", "realistic", "both"], default="realistic", help="Run assisted (debug) and/or realistic (unassisted) benchmarks")
     parser.add_argument("--w-task", dest="w_task", type=float, default=0.25, help="Weight for task success")
     parser.add_argument("--w-tool", dest="w_task", type=float, help="Alias for --w-task")
     parser.add_argument("--w-protocol", dest="w_protocol", type=float, default=0.25, help="Weight for protocol reliability")
@@ -3594,10 +3810,11 @@ if __name__ == "__main__":
     parser.add_argument("--max-backoff-ms", type=int, default=4000, help="Max backoff for retries in ms")
     parser.add_argument("--allow-parallel-tools", action=argparse.BooleanOptionalAction, default=False, help="Allow multiple tool calls in one turn")
     parser.add_argument("--tool-debug", action="store_true", help="Print tool retry diagnostics")
-    parser.add_argument("--auto-submit-on-secret", action=argparse.BooleanOptionalAction, default=True, help="Nudge submit_answer when secret is observed")
+    parser.add_argument("--auto-submit-on-secret", action=argparse.BooleanOptionalAction, default=False, help="Nudge submit_answer when secret is observed")
     parser.add_argument("--production-guards", action=argparse.BooleanOptionalAction, default=True, help="Enable production-style guardrails")
     parser.add_argument("--tool-retry-limit", type=int, default=2, help="Retries for transient tool failures")
     parser.add_argument("--retry-policy", choices=["none", "harness"], default="harness", help="Tool retry behavior")
+    parser.add_argument("--max-parse-failures", type=int, default=3, help="Abort after this many tool-parse failures")
     parser.add_argument("--require-solution-file", action=argparse.BooleanOptionalAction, default=True, help="Require solution.txt before submit_answer")
     parser.add_argument("--require-checksum", action=argparse.BooleanOptionalAction, default=True, help="Require checksum verification before submit_answer")
     parser.add_argument("--follow-policy", choices=["hard", "soft", "none"], default="soft", help="Control expected-trace enforcement")
