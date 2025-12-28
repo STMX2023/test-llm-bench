@@ -3407,7 +3407,7 @@ def run_bench(args):
         time_vals = [t.get("time_sec", 0) or 0 for t in trial_results]
         steps_vals = [t.get("steps_taken", 0) or 0 for t in trial_results]
 
-            agg = {
+        agg = {
             "model": m,
             "benchmark_track": benchmark_track,
             "overall_score_100": round(sum(overall_scores) / len(overall_scores), 2),
@@ -3481,75 +3481,75 @@ def run_bench(args):
             "p90_steps": round(_quantile(steps_vals, 0.9), 2),
             "failure_reason": "",
             "last_tool_output": "",
-            }
-            results.append(agg)
+        }
+        results.append(agg)
 
-            details = {
-                "model": m,
-                "benchmark_track": benchmark_track,
-                "weights": {
-                    "task_success": weights[0],
-                    "protocol": weights[1],
-                    "robustness": weights[2],
-                    "efficiency": weights[3],
+        details = {
+            "model": m,
+            "benchmark_track": benchmark_track,
+            "weights": {
+                "task_success": weights[0],
+                "protocol": weights[1],
+                "robustness": weights[2],
+                "efficiency": weights[3],
+            },
+            "aggregate": agg,
+            "trials": [],
+        }
+        for i, t in enumerate(trial_results, start=1):
+            trial_dir = os.path.join(out_dir, f"trial_{i:02d}")
+            os.makedirs(trial_dir, exist_ok=True)
+            with open(os.path.join(trial_dir, "details.json"), "w", encoding="utf-8") as f:
+                json.dump({
+                    "model": m,
+                    "time_sec": t.get("time_sec"),
+                    "usage": {"total_tokens": t.get("total_tokens", 0)},
+                    "result": t,
+                }, f, indent=2, ensure_ascii=False)
+            with open(os.path.join(trial_dir, "transcript.json"), "w", encoding="utf-8") as f:
+                json.dump(t.get("transcript", []), f, indent=2, ensure_ascii=False)
+            details["trials"].append({
+                "trial": i,
+                "seed": t.get("seed"),
+                "success": t.get("success"),
+                "steps_taken": t.get("steps_taken"),
+                "scores": {
+                    "task_success_100": t.get("task_success_100"),
+                    "compliance_success_100": t.get("compliance_success_100"),
+                    "instruction_fidelity_100": t.get("instruction_fidelity_100"),
+                    "tool_discipline_100": t.get("tool_discipline_100"),
+                    "robustness_100": t.get("robustness_100"),
+                    "efficiency_100": t.get("efficiency_100"),
+                    "overall_score_100": t.get("overall_score_100"),
                 },
-                "aggregate": agg,
-                "trials": [],
-            }
-            for i, t in enumerate(trial_results, start=1):
-                trial_dir = os.path.join(out_dir, f"trial_{i:02d}")
-                os.makedirs(trial_dir, exist_ok=True)
-                with open(os.path.join(trial_dir, "details.json"), "w", encoding="utf-8") as f:
-                    json.dump({
-                        "model": m,
-                        "time_sec": t.get("time_sec"),
-                        "usage": {"total_tokens": t.get("total_tokens", 0)},
-                        "result": t,
-                    }, f, indent=2, ensure_ascii=False)
-                with open(os.path.join(trial_dir, "transcript.json"), "w", encoding="utf-8") as f:
-                    json.dump(t.get("transcript", []), f, indent=2, ensure_ascii=False)
-                details["trials"].append({
-                    "trial": i,
-                    "seed": t.get("seed"),
-                    "success": t.get("success"),
-                    "steps_taken": t.get("steps_taken"),
-                    "scores": {
-                        "task_success_100": t.get("task_success_100"),
-                        "compliance_success_100": t.get("compliance_success_100"),
-                        "instruction_fidelity_100": t.get("instruction_fidelity_100"),
-                        "tool_discipline_100": t.get("tool_discipline_100"),
-                        "robustness_100": t.get("robustness_100"),
-                        "efficiency_100": t.get("efficiency_100"),
-                        "overall_score_100": t.get("overall_score_100"),
-                    },
-                    "paths": {
-                        "details": os.path.join(f"trial_{i:02d}", "details.json"),
-                        "transcript": os.path.join(f"trial_{i:02d}", "transcript.json"),
-                    }
-                })
+                "paths": {
+                    "details": os.path.join(f"trial_{i:02d}", "details.json"),
+                    "transcript": os.path.join(f"trial_{i:02d}", "transcript.json"),
+                }
+            })
 
-            with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
-                json.dump(details, f, indent=2, ensure_ascii=False)
-            results_file = os.path.join(out_dir, "results_longchain.csv")
-            file_exists = os.path.exists(results_file)
-            mode = "a" if run_args.append and file_exists else "w"
-            with open(results_file, mode, newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-                if mode == "w":
-                    w.writeheader()
-                for t in trial_results:
-                    w.writerow({k: t.get(k, "") for k in CSV_FIELDS})
-            table_file = os.path.join(out_dir, "results_longchain.table.txt")
-            with open(table_file, "w", encoding="utf-8") as f:
-                f.write(render_table(trial_results, CSV_FIELDS))
-            print(
-                f"\nRESULT: Success={agg['success']} Avg Steps={agg['steps_taken']} "
-                f"Avg Time={agg.get('time_sec',0):.2f}s "
-                f"p50/p90 Steps={agg.get('p50_steps')}/{agg.get('p90_steps')} "
-                f"p50/p90 Time={agg.get('p50_time_sec')}/{agg.get('p90_time_sec')} "
-                f"Overall={agg.get('overall_score_100')} "
-                f"OverallStd={agg.get('robustness_stddev_overall')}"
-            )
+        with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
+            json.dump(details, f, indent=2, ensure_ascii=False)
+        results_file = os.path.join(out_dir, "results_longchain.csv")
+        file_exists = os.path.exists(results_file)
+        mode = "a" if run_args.append and file_exists else "w"
+        with open(results_file, mode, newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            if mode == "w":
+                w.writeheader()
+            for t in trial_results:
+                w.writerow({k: t.get(k, "") for k in CSV_FIELDS})
+        table_file = os.path.join(out_dir, "results_longchain.table.txt")
+        with open(table_file, "w", encoding="utf-8") as f:
+            f.write(render_table(trial_results, CSV_FIELDS))
+        print(
+            f"\nRESULT: Success={agg['success']} Avg Steps={agg['steps_taken']} "
+            f"Avg Time={agg.get('time_sec',0):.2f}s "
+            f"p50/p90 Steps={agg.get('p50_steps')}/{agg.get('p90_steps')} "
+            f"p50/p90 Time={agg.get('p50_time_sec')}/{agg.get('p90_time_sec')} "
+            f"Overall={agg.get('overall_score_100')} "
+            f"OverallStd={agg.get('robustness_stddev_overall')}"
+        )
         
     # Save
     os.makedirs(args.out_dir, exist_ok=True)
