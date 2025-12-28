@@ -53,6 +53,7 @@ MAX_CHUNK_READS_PER_FILE = 6
 
 CSV_FIELDS = [
     "model",
+    "time_sec",
     "overall_score_100",
     "task_success_100",
     "compliance_success_100",
@@ -2708,15 +2709,49 @@ def run_bench(args):
             table_file = os.path.join(out_dir, "results_longchain.table.txt")
             with open(table_file, "w", encoding="utf-8") as f:
                 f.write(render_table([res], CSV_FIELDS))
-            with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
+            trial_dir = os.path.join(out_dir, "trial_01")
+            os.makedirs(trial_dir, exist_ok=True)
+            with open(os.path.join(trial_dir, "details.json"), "w", encoding="utf-8") as f:
                 json.dump({
                     "model": m,
                     "time_sec": res.get("time_sec"),
                     "usage": {"total_tokens": res.get("total_tokens", 0)},
                     "result": res,
                 }, f, indent=2, ensure_ascii=False)
-            with open(os.path.join(out_dir, "transcript.json"), "w", encoding="utf-8") as f:
+            with open(os.path.join(trial_dir, "transcript.json"), "w", encoding="utf-8") as f:
                 json.dump(res.get("transcript", []), f, indent=2, ensure_ascii=False)
+            details = {
+                "model": m,
+                "weights": {
+                    "protocol": weights[0],
+                    "navigation": weights[1],
+                    "robustness": weights[2],
+                },
+                "aggregate": res,
+                "trials": [
+                    {
+                        "trial": 1,
+                        "seed": res.get("seed"),
+                        "success": res.get("success"),
+                        "steps_taken": res.get("steps_taken"),
+                        "scores": {
+                            "task_success_100": res.get("task_success_100"),
+                            "compliance_success_100": res.get("compliance_success_100"),
+                            "instruction_fidelity_100": res.get("instruction_fidelity_100"),
+                            "tool_discipline_100": res.get("tool_discipline_100"),
+                            "robustness_100": res.get("robustness_100"),
+                            "efficiency_100": res.get("efficiency_100"),
+                            "overall_score_100": res.get("overall_score_100"),
+                        },
+                        "paths": {
+                            "details": os.path.join("trial_01", "details.json"),
+                            "transcript": os.path.join("trial_01", "transcript.json"),
+                        },
+                    }
+                ],
+            }
+            with open(os.path.join(out_dir, "details.json"), "w", encoding="utf-8") as f:
+                json.dump(details, f, indent=2, ensure_ascii=False)
             print(f"\nRESULT: Success={res['success']} Steps={res['steps_taken']} Time={res.get('time_sec',0):.2f}s")
             continue
 
