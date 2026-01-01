@@ -7,6 +7,18 @@ import requests
 
 # --------------------------------------------------------------------------------
 # CONFIGURATION
+
+class AgentTurnResult:
+    def __init__(self, status="N/A", drift=0, finished=False, tool_name=None, tool_args=None, tool_result=None, detail=None, expected_next=None, full_result=None):
+        self.status = status
+        self.drift = drift
+        self.finished = finished
+        self.tool_name = tool_name
+        self.tool_args = tool_args
+        self.tool_result = tool_result
+        self.detail = detail
+        self.expected_next = expected_next
+        self.full_result = full_result
 # --------------------------------------------------------------------------------
 
 PROMPT_SYSTEM = """You are an autonomous agent capable of using tools to navigate a virtual file system.
@@ -88,7 +100,6 @@ CSV_FIELDS = [
     "read_truncate_rate",
     "long_file_rate",
     "concurrent_change_rate",
-    "time_sec",
     "total_tokens",
     "tokens_per_sec",
     "json_valid_rate",
@@ -497,6 +508,8 @@ class VirtualFileSystem:
         entries = set()
         prefix = "" if d in ("", ".") else d + "/"
         for p in sorted(self.all_paths):
+            if not self.artifacts_unlocked and self._is_artifacts_path(p):
+                continue
             if prefix and not p.startswith(prefix):
                 continue
             rel = p[len(prefix):] if prefix else p
@@ -550,38 +563,6 @@ class VirtualFileSystem:
             self.solution_written = True
             self.solution_content = content
         return _ok_payload(path=p, message="Write complete.")
-
-    def _maybe_truncate(self, path: str, content: str, max_bytes: int, truncate_rate: float) -> str:
-        total_size = len(content)
-        if max_bytes <= 0:
-            return _ok_payload(
-                path=path,
-                content=content,
-                truncated=False,
-                next_offset=None,
-                done=True,
-                total_size=total_size
-            )
-        if len(content) <= max_bytes and self.rng.random() >= truncate_rate:
-            return _ok_payload(
-                path=path,
-                content=content,
-                truncated=False,
-                next_offset=None,
-                done=True,
-                total_size=total_size
-            )
-        chunk = content[:max_bytes]
-        next_offset = len(chunk)
-        done = next_offset >= total_size
-        return _ok_payload(
-            path=path,
-            chunk=chunk,
-            truncated=not done,
-            next_offset=None if done else next_offset,
-            done=done,
-            total_size=total_size
-        )
 
     def _maybe_concurrent_update(self, path: str, rate: float):
         self.last_world_change = False
@@ -937,6 +918,25 @@ def _parse_error_payload(text: str) -> Optional[Dict[str, Any]]:
 def _is_error_payload(text: str) -> bool:
     return _parse_error_payload(text) is not None
 
+ANSI_RESET = "\x1b[0m"
+ANSI_RED = "\x1b[31m"
+ANSI_GREEN = "\x1b[32m"
+ANSI_YELLOW = "\x1b[33m"
+ANSI_BLUE = "\x1b[34m"
+ANSI_DIM = "\x1b[2m"
+
+def _use_color() -> bool:
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    if os.environ.get("CLICOLOR") == "0":
+        return False
+    return sys.stdout.isatty()
+
+def _colorize(text: str, color: str, enabled: bool) -> str:
+    if not enabled:
+        return text
+    return f"{color}{text}{ANSI_RESET}"
+
 ALLOWED_TOOLS = {
     "read_file",
     "read_file_chunk",
@@ -975,6 +975,26 @@ TOOL_SCHEMAS = {
     "checkpoint": {"args": {"name": "string"}},
     "rollback": {"args": {"name": "string"}},
     "submit_answer": {"args": {"answer": "string"}},
+}
+
+TOOL_ARG_SPECS = {
+    "read_file": {"required": ["path"], "optional": []},
+    "read_file_chunk": {"required": ["path"], "optional": ["offset", "length"]},
+    "list_files": {"required": [], "optional": ["directory", "cursor", "limit"]},
+    "stat": {"required": ["path"], "optional": []},
+    "glob": {"required": ["directory", "pattern"], "optional": []},
+    "tree": {"required": ["directory"], "optional": ["depth"]},
+    "read_json": {"required": ["path"], "optional": []},
+    "write_json": {"required": ["path", "obj"], "optional": []},
+    "write_file": {"required": ["path", "content"], "optional": []},
+    "api_lookup": {"required": ["query"], "optional": []},
+    "search_text": {"required": ["query"], "optional": ["directory", "max_results"]},
+    "capabilities": {"required": [], "optional": []},
+    "remember": {"required": ["key", "value"], "optional": []},
+    "recall": {"required": ["key"], "optional": []},
+    "checkpoint": {"required": ["name"], "optional": []},
+    "rollback": {"required": ["name"], "optional": []},
+    "submit_answer": {"required": ["answer"], "optional": []},
 }
 
 TOOL_OUTPUT_REQUIRED = {
@@ -1161,6 +1181,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
     memory_store = ctx["memory_store"]
     checkpoints = ctx["checkpoints"]
     messages = ctx["messages"]
+    chunk_blocked_paths = ctx["chunk_blocked_paths"]
 
     result = None
     finished = False
@@ -1180,6 +1201,8 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
     allow_streaming = False
     explore_over_budget = False
     world_changed = False
+    chunk_blocked = False
+    chunk_blocked_path = None
 
     def _solution_is_valid() -> bool:
         if not vfs.solution_written:
@@ -1285,6 +1308,9 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             "advanced": False,
             "tool_chunks": tool_chunks,
             "world_changed": False,
+            "chunk_blocked_paths": chunk_blocked_paths,
+            "chunk_blocked": chunk_blocked,
+            "chunk_blocked_path": chunk_blocked_path,
         }
 
     if tool_name == "submit_answer" and config.production_guards and config.no_guess and not (secret_found or _solution_is_valid()):
@@ -1321,6 +1347,9 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             "advanced": False,
             "tool_chunks": tool_chunks,
             "world_changed": False,
+            "chunk_blocked_paths": chunk_blocked_paths,
+            "chunk_blocked": chunk_blocked,
+            "chunk_blocked_path": chunk_blocked_path,
         }
 
     # Enforce strict-follow as a preflight block on trace reads.
@@ -1374,7 +1403,51 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
                     "advanced": False,
                     "tool_chunks": tool_chunks,
                     "world_changed": False,
+                    "chunk_blocked_paths": chunk_blocked_paths,
+                    "chunk_blocked": chunk_blocked,
+                    "chunk_blocked_path": chunk_blocked_path,
                 }
+
+    if tool_name in ("read_file", "read_file_chunk"):
+        req_path = (tool_args.get("path") or "").strip("./")
+        if req_path in chunk_blocked_paths and _is_trace_path(req_path) and req_path not in BOOTSTRAP_OK:
+            _record_wrong_trace()
+            result = _error_payload(
+                "ECHUNKLIMIT",
+                f"Chunk limit reached for '{req_path}'. Choose another trace.",
+                False,
+                0
+            )
+            result, tool_chunks = _finalize(result)
+            return {
+                "result": result,
+                "finished": False,
+                "tool_ok": tool_ok,
+                "args_ok": args_ok,
+                "tool_failed": False,
+                "blocked_submit": False,
+                "honeypot_hit": False,
+                "enforced_path": None,
+                "retries": 0,
+                "latency_ms": 0,
+                "tool_timed_out": False,
+                "permission_denied": False,
+                "expected_index": expected_index,
+                "wrong_read_streak": wrong_read_streak,
+                "wrong_trace_reads": wrong_trace_reads,
+                "explore_per_hop": explore_per_hop,
+                "explore_total": explore_total,
+                "explore_over_budget_events": explore_over_budget_events,
+                "explore_over_budget": explore_over_budget,
+                "secret_found": secret_found,
+                "secret_code_seen": secret_code_seen,
+                "advanced": False,
+                "tool_chunks": tool_chunks,
+                "world_changed": False,
+                "chunk_blocked_paths": chunk_blocked_paths,
+                "chunk_blocked": True,
+                "chunk_blocked_path": req_path,
+            }
 
     def action():
         if tool_name == "read_file":
@@ -1421,7 +1494,11 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
             max_results = tool_args.get("max_results", 5)
             return vfs.search_text(query, directory, max_results=max_results)
         if tool_name == "capabilities":
-            return _ok_payload(tools=TOOL_SCHEMAS)
+            return _ok_payload(
+                tools=TOOL_SCHEMAS,
+                allowed_tools=sorted(ALLOWED_TOOLS),
+                args_schema=TOOL_ARG_SPECS
+            )
         if tool_name == "remember":
             key = tool_args.get("key", "")
             memory_store[key] = tool_args.get("value")
@@ -1472,6 +1549,12 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
         err = _parse_error_payload(result)
         if err and err.get("code") == "EACCES":
             permission_denied = True
+        if err and err.get("code") == "ECHUNKLIMIT" and tool_name == "read_file_chunk":
+            req_path = (tool_args.get("path") or "").strip("./")
+            if req_path:
+                chunk_blocked_paths.add(req_path)
+                chunk_blocked = True
+                chunk_blocked_path = req_path
         if tool_name == "read_file" and not err:
             try:
                 obj = json.loads(result)
@@ -1602,6 +1685,9 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any], ctx: Dict[str, Any],
         "stream_started_path": stream_started_path,
         "stream_completed_path": stream_completed_path,
         "world_changed": world_changed,
+        "chunk_blocked_paths": chunk_blocked_paths,
+        "chunk_blocked": chunk_blocked,
+        "chunk_blocked_path": chunk_blocked_path,
     }
 
 def _truncate_cell(value: Any, width: int) -> str:
@@ -1834,6 +1920,74 @@ def apply_mode_defaults(args: argparse.Namespace) -> None:
         args.read_max_bytes = max(args.read_max_bytes, 512)
         args.read_truncate_rate = 0.0
 
+def _run_watcher_intervention(
+    config: argparse.Namespace,
+    base_url: str,
+    watcher_model: str,
+    messages: List[Dict[str, Any]],
+    status: str,
+    detail: str,
+    drift_score: int,
+    step_retries: int,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_result: str,
+    expected_next: Optional[str]
+) -> Optional[str]:
+    # 1. Check conditions
+    # Deviation predicate: Status is WRONG or OFF, and drift_score > 0
+    if status not in ("WRONG", "OFF"):
+        return None
+    if drift_score <= 0:
+        return None
+    # Retry cap per step
+    if step_retries >= config.watcher_retry_cap:
+        print(f"    -> [WATCHER] Max retries ({config.watcher_retry_cap}) reached for this step. Releasing control.")
+        return None
+
+    print(f"    -> [WATCHER] Intervention triggered! (Status: {status}, Drift: {drift_score})")
+
+    # 2. Construct Prompt
+    # Minimal context as requested
+    prompt = (
+        f"You are a Supervisor for an automated agent.\n"
+        f"The agent has deviated from the expected execution path.\n\n"
+        f"last_action: {tool_name} {json.dumps(tool_args)}\n"
+        f"result: {tool_result[:500]} {'...' if len(tool_result)>500 else ''}\n"
+        f"expected_next_path: {expected_next if expected_next else 'Unknown'}\n"
+        f"error_context: {detail}\n\n"
+        f"Goal: Analyze the failure and provide clear, instructional text output to guide the agent to the correct next step.\n"
+        f"Do not execute tools yourself. Just provide the instructions."
+    )
+    
+    # 3. Call Watcher Model
+    try:
+        payload = {
+            "model": watcher_model,
+            "messages": [
+                {"role": "system", "content": "You are a helpful supervisor."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.0,
+            "max_tokens": 1000,
+        }
+        
+        # Use watcher_base_url if provided, else use the primary base_url
+        url = config.watcher_base_url if config.watcher_base_url else base_url
+        
+        r = requests.post(f"{url}/chat/completions", json=payload, timeout=30)
+        r.raise_for_status()
+        out = r.json()
+        advice = out["choices"][0]["message"]["content"]
+        
+        filtered_advice = advice.strip()
+        print(f"    -> [WATCHER] Advice: {filtered_advice[:100]}...")
+        return f"[SUPERVISOR]: {filtered_advice}"
+        
+    except Exception as e:
+        print(f"    -> [WATCHER] Failed to get advice: {e}")
+        return None
+
 def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_override: Optional[int] = None) -> Dict[str, Any]:
     vfs = VirtualFileSystem(
         chain_length=config.chain_length,
@@ -1851,6 +2005,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
     ]
     
     steps = 0
+    watcher_interventions = 0
     total_tokens = 0
     start_time = time.time()
     expected_index = -1
@@ -1891,12 +2046,19 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
     stream_sessions_started = 0
     stream_sessions_completed = 0
     active_streams = set()
+    chunk_blocked_paths = set()
+    chunk_blocked_paths = set()
+    chunk_blocked_paths = set()
     artifact_enoent_hits = 0
     artifact_hint_sent = False
     dead_end_hint_sent = False
     chain_complete_hint_sent = False
     explore_budget_hint_sent = False
     parse_failures = 0
+    use_color = _use_color()
+    log_expected_index = -1
+    drift_score = 0
+    last_offtrack_sig = None
 
     transcript = []
 
@@ -2041,6 +2203,173 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
         if exec_res.get("enforced_path"):
             return "E_STRICT_BLOCK"
         return None
+
+    def _norm_path(path: Optional[str]) -> str:
+        p = (path or "").strip()
+        if p in (".", "./"):
+            return ""
+        p = p.strip("./")
+        return p.rstrip("/")
+
+    def _parent_dir(path: Optional[str]) -> str:
+        p = _norm_path(path)
+        if not p or "/" not in p:
+            return ""
+        return p.rsplit("/", 1)[0]
+
+    def _dir_matches_expected(dir_path: str, expected_dir: str) -> bool:
+        d = _norm_path(dir_path)
+        if expected_dir == "":
+            return d == ""
+        return d == expected_dir
+
+    def _offtrack_event(offtrack_sig: str) -> str:
+        return "repeat_wrong" if last_offtrack_sig == offtrack_sig else "wrong"
+
+    def _emit_deviation(event: str, offtrack_sig: Optional[str] = None) -> str:
+        nonlocal drift_score, last_offtrack_sig
+        prev_drift = drift_score
+        if event == "wrong":
+            drift_score += 1
+            last_offtrack_sig = offtrack_sig
+        elif event == "repeat_wrong":
+            pass
+        else:
+            if event == "correct" and drift_score > 0:
+                drift_score -= 1
+            last_offtrack_sig = None
+
+        drift_delta = drift_score - prev_drift
+        if drift_delta < 0:
+            drift_color = ANSI_BLUE
+        elif drift_score == 0:
+            drift_color = ANSI_GREEN
+        elif drift_delta > 0:
+            drift_color = ANSI_RED
+        else:
+            drift_color = ANSI_YELLOW
+
+        drift_text = _colorize(str(drift_score), drift_color, use_color)
+        return f"    -> Deviation: {drift_text}"
+
+    def _failure_indicator(detail: str, offtrack_sig: str) -> str:
+        status_text = _colorize("FAIL", ANSI_RED, use_color)
+        event = _offtrack_event(offtrack_sig)
+        deviation_line = _emit_deviation(event, offtrack_sig)
+        return f"    -> Path: {status_text} ({detail})\n{deviation_line}"
+
+    def _path_status_line(tool_name: str, tool_args: Dict[str, Any], exec_res: Dict[str, Any]) -> Tuple[str, str, Optional[str]]:
+        nonlocal log_expected_index
+        status = "N/A"
+        detail = None
+        color = ANSI_DIM
+        bootstrap_files = {"start_instructions.txt", "task.md", "readme.md", "meta.json"}
+        event = "none"
+        offtrack_sig = None
+
+        expected_next = (
+            vfs.path_sequence[log_expected_index + 1]
+            if log_expected_index + 1 < len(vfs.path_sequence)
+            else None
+        )
+        expected_dir = _parent_dir(expected_next)
+
+        if tool_name in ("read_file", "read_file_chunk") and isinstance(tool_args, dict):
+            req_path = _norm_path(tool_args.get("path"))
+            is_trace = bool(re.search(r"(?:^|/)trace_\d+\.log$", req_path))
+            if req_path in bootstrap_files:
+                status = "BOOT"
+                color = ANSI_YELLOW
+                detail = "bootstrap"
+            elif not req_path or not is_trace:
+                if expected_next:
+                    status = "OFF"
+                    color = ANSI_RED
+                    detail = "non-trace read"
+                    offtrack_sig = f"{tool_name}:{req_path or 'missing'}"
+                    event = _offtrack_event(offtrack_sig)
+                else:
+                    status = "N/A"
+                    color = ANSI_DIM
+                    detail = "non-trace"
+            else:
+                res = exec_res.get("result")
+                err = None
+                if exec_res.get("tool_failed"):
+                    err = "tool_failed"
+                if isinstance(res, str):
+                    parsed = _parse_error_payload(res)
+                    if parsed and parsed.get("code"):
+                        err = parsed.get("code")
+
+                current_path = (
+                    vfs.path_sequence[log_expected_index]
+                    if 0 <= log_expected_index < len(vfs.path_sequence)
+                    else None
+                )
+
+                should_advance = False
+                if expected_next and req_path == expected_next:
+                    status = "OK"
+                    color = ANSI_GREEN
+                    should_advance = True
+                    event = "correct"
+                elif current_path and req_path == current_path:
+                    status = "CONT"
+                    color = ANSI_YELLOW
+                    detail = "same trace"
+                else:
+                    status = "WRONG"
+                    color = ANSI_RED
+                    offtrack_sig = f"trace:{req_path}"
+                    event = _offtrack_event(offtrack_sig)
+                    if expected_next:
+                        detail = f"expected {expected_next}"
+
+                if err:
+                    detail = f"{detail}, error {err}" if detail else f"error {err}"
+                    should_advance = False
+                    if event == "correct":
+                        event = "none"
+
+                if should_advance and not err:
+                    log_expected_index += 1
+                    offtrack_sig = None
+                    event = "correct"
+        else:
+            if isinstance(tool_args, dict):
+                target_dir = tool_args.get("directory")
+                target_path = tool_args.get("path")
+            else:
+                target_dir = None
+                target_path = None
+            if expected_next and tool_name in ("list_files", "tree", "glob", "search_text"):
+                dir_arg = target_dir or "."
+                if _dir_matches_expected(dir_arg, expected_dir):
+                    status = "PROBE"
+                    color = ANSI_YELLOW
+                    detail = f"dir {dir_arg}"
+                else:
+                    status = "OFF"
+                    color = ANSI_RED
+                    detail = "off-path"
+                    offtrack_sig = f"{tool_name}:{_norm_path(dir_arg)}"
+                    event = _offtrack_event(offtrack_sig)
+            elif expected_next:
+                status = "OFF"
+                color = ANSI_RED
+                detail = "non-trace tool"
+                target = _norm_path(target_path) if target_path else tool_name
+                offtrack_sig = f"{tool_name}:{target}"
+                event = _offtrack_event(offtrack_sig)
+            else:
+                detail = "non-trace tool"
+
+        status_text = _colorize(status, color, use_color)
+        deviation_line = _emit_deviation(event, offtrack_sig)
+        if detail:
+            return f"    -> Path: {status_text} ({detail})\n{deviation_line}", status, detail
+        return f"    -> Path: {status_text}\n{deviation_line}", status, detail
     
     print(
         f"Starting loop for {model}. Chain length: {config.chain_length} | Decoys: {config.decoy_count} | "
@@ -2048,7 +2377,19 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
         f"ToolFail: {config.tool_failure_rate}"
     )
     
-    while steps < MAX_STEPS:
+    def _do_agent_turn(force_messages=None) -> AgentTurnResult:
+        nonlocal steps, json_valid, tool_valid, args_valid, schema_valid, total_tokens, parse_failures, output_schema_valid
+        nonlocal path_correct, artifacts_access_before_unlock, wrong_trace_reads, explore_over_budget_events, stream_sessions_started, stream_sessions_completed, redundant_reads, list_files_calls
+        nonlocal read_file_calls, read_file_chunk_calls, write_file_calls, search_text_calls, api_lookup_calls, submit_attempts, blocked_submit_attempts, tool_failed_events
+        nonlocal tool_error_recovery_success, honeypot_hits, pending_error_recovery, hint_since_error, expected_index, wrong_read_streak, explore_per_hop, explore_total
+        nonlocal secret_found, secret_code_seen, chunk_blocked_paths, last_tool_output, drift_score
+        status_code = 'N/A'
+        detail = None
+        drift = 0
+        tool_name = None
+        tool_args = None
+        result = None
+        finished = False
         steps += 1
         
         # Make API Call
@@ -2093,6 +2434,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 # Actually, let's just feed back "Error: No valid JSON tool call found."
                 print(f"    -> Invalid Output (No JSON)")
                 parse_failure_code = "E_PARSE"
+                print(_failure_indicator(parse_failure_code, f"parse:{parse_failure_code}"))
                 parse_failures += 1
                 transcript.append({
                     "step": steps,
@@ -2114,7 +2456,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     **_stream_snapshot()
                 })
                 if parse_failures >= config.max_parse_failures:
-                    return {
+                    return AgentTurnResult(finished=True, full_result={
                         "success": False,
                         "task_success": False,
                         "compliance_success": _compliance_success(),
@@ -2169,8 +2511,8 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
                         "honeypot_hits": honeypot_hits,
                         "transcript": transcript
-                    }
-                continue
+                    })
+                return AgentTurnResult(status='N/A')
             json_valid += 1
             effective_reject = config.reject_multi_tool and not config.allow_parallel_tools
             if config.production_guards and effective_reject and json_count > 1:
@@ -2196,7 +2538,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     **_stream_snapshot()
                 })
                 if parse_failures >= config.max_parse_failures:
-                    return {
+                    return AgentTurnResult(finished=True, full_result={
                         "success": False,
                         "task_success": False,
                         "compliance_success": _compliance_success(),
@@ -2251,14 +2593,15 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
                         "honeypot_hits": honeypot_hits,
                         "transcript": transcript
-                    }
-                continue
+                    })
+                return AgentTurnResult(status='N/A')
             if json_count > 1 and config.allow_parallel_tools:
                 tool_calls_batch = parse_multi_tool_calls(completion)
 
             if isinstance(tool_call, list):
                 if not config.allow_parallel_tools:
                     parse_failure_code = "E_MULTITOOL"
+                    print(_failure_indicator(parse_failure_code, f"parse:{parse_failure_code}"))
                     parse_failures += 1
                     transcript.append({
                         "step": steps,
@@ -2280,7 +2623,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         **_stream_snapshot()
                     })
                     if parse_failures >= config.max_parse_failures:
-                        return {
+                        return AgentTurnResult(finished=True, full_result={
                             "success": False,
                             "task_success": False,
                             "compliance_success": _compliance_success(),
@@ -2335,8 +2678,8 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                             "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
                             "honeypot_hits": honeypot_hits,
                             "transcript": transcript
-                        }
-                    continue
+                        })
+                    return AgentTurnResult(status='N/A')
                 tool_calls_batch = tool_call
                 tool_name = tool_calls_batch[0].get("tool")
                 tool_args = tool_calls_batch[0].get("args", {})
@@ -2345,6 +2688,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 tool_args = tool_call.get("args")
             if tool_name not in ALLOWED_TOOLS or not isinstance(tool_args, dict):
                 parse_failure_code = "E_SCHEMA"
+                print(_failure_indicator(parse_failure_code, f"parse:{parse_failure_code}"))
                 parse_failures += 1
                 transcript.append({
                     "step": steps,
@@ -2366,7 +2710,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     **_stream_snapshot()
                 })
                 if parse_failures >= config.max_parse_failures:
-                    return {
+                    return AgentTurnResult(finished=True, full_result={
                         "success": False,
                         "task_success": False,
                         "compliance_success": _compliance_success(),
@@ -2421,8 +2765,8 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
                         "honeypot_hits": honeypot_hits,
                         "transcript": transcript
-                    }
-                continue
+                    })
+                return AgentTurnResult(status='N/A')
             print(f"    -> Tool: {tool_name} {tool_args}")
             
             tool_start = time.perf_counter()
@@ -2441,6 +2785,9 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 step_stream_completed_paths = []
                 step_world_changed = []
                 step_failure_codes = []
+                primary_exec_res = None
+                primary_tool_name = None
+                primary_tool_args = None
                 finished = False
                 for idx, call in enumerate(tool_calls_batch):
                     call_tool = call.get("tool")
@@ -2487,8 +2834,13 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                         "memory_store": memory_store,
                         "checkpoints": checkpoints,
                         "messages": messages,
+                        "chunk_blocked_paths": chunk_blocked_paths,
                     }
                     exec_res = execute_tool(call_tool, call_args, ctx, allow_advance=(idx == 0))
+                    if idx == 0:
+                        primary_exec_res = exec_res
+                        primary_tool_name = call_tool
+                        primary_tool_args = call_args
                     expected_index = exec_res["expected_index"]
                     wrong_read_streak = exec_res["wrong_read_streak"]
                     wrong_trace_reads = exec_res["wrong_trace_reads"]
@@ -2497,6 +2849,9 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     explore_over_budget_events = exec_res["explore_over_budget_events"]
                     secret_found = exec_res["secret_found"]
                     secret_code_seen = exec_res["secret_code_seen"]
+                    chunk_blocked_paths = exec_res["chunk_blocked_paths"]
+                    if exec_res.get("chunk_blocked"):
+                        step_failure_codes.append("E_CHUNK_BLOCK")
                     _track_streaming(exec_res)
                     _maybe_hint_artifacts(call_tool, call_args, exec_res)
                     _maybe_hint_dead_end(call_tool, exec_res)
@@ -2551,6 +2906,10 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     schema_valid += 1
                 tool_elapsed_ms = int((time.perf_counter() - tool_start) * 1000)
                 print(f"    -> Result: {str(batch_results)[:100]}...")
+                if primary_exec_res:
+                    status_line, status_code, status_detail = _path_status_line(primary_tool_name, primary_tool_args, primary_exec_res)
+                    print(status_line)
+                    
                 batch_payload = json.dumps(batch_results, ensure_ascii=False)
                 noisy_batch_payload = apply_tool_noise(batch_payload, vfs.rng, config.noise_level, mode=config.noise_mode)
                 last_tool_output = noisy_batch_payload
@@ -2562,6 +2921,8 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_result": noisy_batch_payload,
                     "tool_chunks": step_tool_chunks,
                     "expected_next": expected_next_log,
+                    "chunk_blocked": any(code == "E_CHUNK_BLOCK" for code in step_failure_codes),
+                    "chunk_blocked_paths": sorted(chunk_blocked_paths),
                     "tool_failed": step_tool_failed,
                     "permission_denied": step_permission_denied,
                     "blocked_submit": step_blocked_submit,
@@ -2594,6 +2955,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "memory_store": memory_store,
                     "checkpoints": checkpoints,
                     "messages": messages,
+                    "chunk_blocked_paths": chunk_blocked_paths,
                 }
                 _track_artifacts_access(tool_name, tool_args)
                 exec_res = execute_tool(tool_name, tool_args, ctx, allow_advance=True)
@@ -2605,6 +2967,9 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 explore_over_budget_events = exec_res["explore_over_budget_events"]
                 secret_found = exec_res["secret_found"]
                 secret_code_seen = exec_res["secret_code_seen"]
+                chunk_blocked_paths = exec_res["chunk_blocked_paths"]
+                if exec_res.get("chunk_blocked"):
+                    print(f"    -> [CHUNK-BLOCK] {exec_res.get('chunk_blocked_path')}")
                 _track_streaming(exec_res)
                 _maybe_hint_artifacts(tool_name, tool_args, exec_res)
                 _maybe_hint_dead_end(tool_name, exec_res)
@@ -2663,6 +3028,9 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 finished = exec_res["finished"]
                 failure_code = _failure_code_for_exec(exec_res)
                 print(f"    -> Result: {str(result)[:100]}...")
+                status_line, status_code, status_detail = _path_status_line(tool_name, tool_args, exec_res)
+                print(status_line)
+                
                 noisy_result = apply_tool_noise(result, vfs.rng, config.noise_level, mode=config.noise_mode)
                 last_tool_output = noisy_result
                 messages.append({"role": "user", "content": noisy_result})
@@ -2673,6 +3041,8 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "tool_result": noisy_result,
                     "tool_chunks": tool_chunks,
                     "expected_next": expected_next_log,
+                    "chunk_blocked": exec_res.get("chunk_blocked", False),
+                    "chunk_blocked_path": exec_res.get("chunk_blocked_path"),
                     "tool_failed": exec_res["tool_failed"],
                     "permission_denied": exec_res["permission_denied"],
                     "blocked_submit": exec_res["blocked_submit"],
@@ -2696,7 +3066,7 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 })
 
             if finished:
-                return {
+                return AgentTurnResult(finished=True, full_result={
                     "success": True,
                     "task_success": True,
                     "compliance_success": _compliance_success(),
@@ -2753,11 +3123,11 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                     "honeypot_hits": honeypot_hits,
                     "last_tool_output": last_tool_output,
                     "transcript": transcript
-                }
+                })
             
         except Exception as e:
             print(f"Error in loop: {e}")
-            return {
+            return AgentTurnResult(finished=True, full_result={
                 "success": False,
                 "task_success": False,
                 "compliance_success": _compliance_success(),
@@ -2812,14 +3182,84 @@ def run_agent_loop(model: str, base_url: str, config: argparse.Namespace, seed_o
                 "recovery_rate": (tool_error_recovery_success / tool_failed_events) if tool_failed_events else 1.0,
                 "honeypot_hits": honeypot_hits,
                 "transcript": transcript
-            }
+            })
             
+
+        return AgentTurnResult(
+            status=status_code if 'status_code' in locals() else 'N/A',
+            drift=drift_score,
+            finished=finished if 'finished' in locals() else False,
+            tool_name=tool_name if 'tool_name' in locals() else None,
+            tool_args=tool_args if 'tool_args' in locals() else None,
+            tool_result=last_tool_output, # Approx
+            detail=status_detail if 'status_detail' in locals() else None,
+            expected_next=expected_next if 'expected_next' in locals() else None
+        )
+    
+    # Driver Loop
+    while steps < MAX_STEPS:
+        # steps += 1 (moved to _do_agent_turn)
+        
+        # 1. Primary Turn
+        res = _do_agent_turn()
+        
+        if res.finished:
+            res.full_result["watcher_interventions"] = watcher_interventions
+            return res.full_result
+
+        # Auto-submit secret logic (moved out of closure or kept in closure? It modifies messages. 
+        # The closure should handle it, or we duplicate. Original code had it after loop body.
+        # Actually in original code it was inside the loop. 
+        # We'll rely on the closure handling it if it was inside.)
+        
+        # 2. Watcher Loop
+        if config.enable_watcher and config.watcher_model and res.status in ("WRONG", "OFF") and res.drift > 0:
+            intervention_streak = 0
+            while res.status in ("WRONG", "OFF") and res.drift > 0 and intervention_streak < config.watcher_retry_cap and steps < MAX_STEPS:
+                
+                # Ask Watcher
+                advice = _run_watcher_intervention(
+                    config=config,
+                    base_url=base_url,
+                    watcher_model=config.watcher_model,
+                    messages=messages,
+                    status=res.status,
+                    detail=res.detail,
+                    drift_score=res.drift,
+                    step_retries=intervention_streak,
+                    tool_name=res.tool_name,
+                    tool_args=res.tool_args,
+                    tool_result=res.tool_result,
+                    expected_next=res.expected_next
+                )
+                
+                if not advice:
+                    break
+                    
+                messages.append({"role": "user", "content": advice})
+                
+                # Retry Turn
+                # steps += 1 (moved to _do_agent_turn)
+                watcher_interventions += 1
+                intervention_streak += 1
+                
+                res = _do_agent_turn()
+                
+                if res.status == "OK":
+                    break
+                if res.finished:
+                    res.full_result["watcher_interventions"] = watcher_interventions
+                    return res.full_result
+
+    # End of MAX_STEPS
+
     return {
         "success": False,
         "task_success": False,
         "compliance_success": _compliance_success(),
         "failure_reason": "Max steps reached",
         "steps_taken": steps,
+        "watcher_interventions": watcher_interventions,
         "last_tool_output": last_tool_output,
         "chain_length": config.chain_length,
         "decoy_count": config.decoy_count,
@@ -2926,6 +3366,7 @@ def run_baseline_oracle(config: argparse.Namespace, seed_override: Optional[int]
     stream_sessions_started = 0
     stream_sessions_completed = 0
     active_streams = set()
+    chunk_blocked_paths = set()
 
     transcript = []
 
@@ -2975,7 +3416,7 @@ def run_baseline_oracle(config: argparse.Namespace, seed_override: Optional[int]
         nonlocal steps, expected_index, wrong_read_streak, wrong_trace_reads, explore_per_hop, explore_total
         nonlocal explore_over_budget_events, secret_found, secret_code_seen, last_tool_output, json_valid
         nonlocal tool_valid, args_valid, schema_valid, output_schema_valid, tool_failed_events, path_correct
-        nonlocal tool_error_recovery_success, pending_error_recovery, redundant_reads
+        nonlocal tool_error_recovery_success, pending_error_recovery, redundant_reads, chunk_blocked_paths
         nonlocal list_files_calls, read_file_calls, read_file_chunk_calls, write_file_calls, search_text_calls
         nonlocal api_lookup_calls, submit_attempts, blocked_submit_attempts, honeypot_hits
 
@@ -3030,6 +3471,7 @@ def run_baseline_oracle(config: argparse.Namespace, seed_override: Optional[int]
             "memory_store": memory_store,
             "checkpoints": checkpoints,
             "messages": [],
+            "chunk_blocked_paths": chunk_blocked_paths,
         }
         exec_res = execute_tool(tool_name, tool_args, ctx, allow_advance=True)
         expected_index = exec_res["expected_index"]
@@ -3040,6 +3482,7 @@ def run_baseline_oracle(config: argparse.Namespace, seed_override: Optional[int]
         explore_over_budget_events = exec_res["explore_over_budget_events"]
         secret_found = exec_res["secret_found"]
         secret_code_seen = exec_res["secret_code_seen"]
+        chunk_blocked_paths = exec_res["chunk_blocked_paths"]
         _track_streaming(exec_res)
         if exec_res["advanced"]:
             path_correct += 1
@@ -3213,6 +3656,7 @@ def run_baseline_random(config: argparse.Namespace, seed_override: Optional[int]
     stream_sessions_started = 0
     stream_sessions_completed = 0
     active_streams = set()
+    chunk_blocked_paths = set()
 
     transcript = []
 
@@ -3251,7 +3695,7 @@ def run_baseline_random(config: argparse.Namespace, seed_override: Optional[int]
         nonlocal steps, expected_index, wrong_read_streak, wrong_trace_reads, explore_per_hop, explore_total
         nonlocal explore_over_budget_events, secret_found, secret_code_seen, last_tool_output, json_valid
         nonlocal tool_valid, args_valid, schema_valid, output_schema_valid, tool_failed_events, path_correct
-        nonlocal tool_error_recovery_success, pending_error_recovery, redundant_reads
+        nonlocal tool_error_recovery_success, pending_error_recovery, redundant_reads, chunk_blocked_paths
         nonlocal list_files_calls, read_file_calls, read_file_chunk_calls, write_file_calls, search_text_calls
         nonlocal api_lookup_calls, submit_attempts, blocked_submit_attempts, honeypot_hits
 
@@ -3306,6 +3750,7 @@ def run_baseline_random(config: argparse.Namespace, seed_override: Optional[int]
             "memory_store": memory_store,
             "checkpoints": checkpoints,
             "messages": [],
+            "chunk_blocked_paths": chunk_blocked_paths,
         }
         exec_res = execute_tool(tool_name, tool_args, ctx, allow_advance=True)
         expected_index = exec_res["expected_index"]
@@ -3316,6 +3761,7 @@ def run_baseline_random(config: argparse.Namespace, seed_override: Optional[int]
         explore_over_budget_events = exec_res["explore_over_budget_events"]
         secret_found = exec_res["secret_found"]
         secret_code_seen = exec_res["secret_code_seen"]
+        chunk_blocked_paths = exec_res["chunk_blocked_paths"]
         _track_streaming(exec_res)
         if exec_res["advanced"]:
             path_correct += 1
@@ -3814,7 +4260,7 @@ if __name__ == "__main__":
     parser.add_argument("--production-guards", action=argparse.BooleanOptionalAction, default=True, help="Enable production-style guardrails")
     parser.add_argument("--tool-retry-limit", type=int, default=2, help="Retries for transient tool failures")
     parser.add_argument("--retry-policy", choices=["none", "harness"], default="harness", help="Tool retry behavior")
-    parser.add_argument("--max-parse-failures", type=int, default=3, help="Abort after this many tool-parse failures")
+    parser.add_argument("--max-parse-failures", type=int, default=4, help="Abort after this many tool-parse failures")
     parser.add_argument("--require-solution-file", action=argparse.BooleanOptionalAction, default=True, help="Require solution.txt before submit_answer")
     parser.add_argument("--require-checksum", action=argparse.BooleanOptionalAction, default=True, help="Require checksum verification before submit_answer")
     parser.add_argument("--follow-policy", choices=["hard", "soft", "none"], default="soft", help="Control expected-trace enforcement")
@@ -3824,13 +4270,19 @@ if __name__ == "__main__":
     parser.add_argument("--strict-grace", type=int, default=1, help="Allow this many wrong reads before strict-follow blocks")
     parser.add_argument("--no-guess", action=argparse.BooleanOptionalAction, default=True, help="Block submit_answer before secret is found")
     parser.add_argument("--temperature", type=float, default=0.3, help="Low temp for tool use")
-    parser.add_argument("--max-tokens", type=int, default=1000)
+    parser.add_argument("--max-tokens", type=int, default=3000)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--stop", action="append", default=[], help="Stop sequences")
     parser.add_argument("--out-dir", default="advanced tool use bench", help="Output directory for results")
     parser.add_argument("--append", action="store_true", help="Append to existing results file if it exists")
     parser.add_argument("--self-check", action="store_true", help="Run a small VFS chunking sanity check and exit")
     parser.add_argument("--baselines", action=argparse.BooleanOptionalAction, default=True, help="Include baseline agents in the benchmark")
+    
+    # Watcher Arguments
+    parser.add_argument("--watcher-model", default=None, help="Model ID for the Watcher supervisor")
+    parser.add_argument("--watcher-base-url", default=None, help="Base URL for Watcher (defaults to --base-url)")
+    parser.add_argument("--enable-watcher", action=argparse.BooleanOptionalAction, default=False, help="Enable Watcher intervention on deviation")
+    parser.add_argument("--watcher-retry-cap", type=int, default=3, help="Max intervention retries per step/streak")
     
     args = parser.parse_args()
     if args.self_check:
